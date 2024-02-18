@@ -184,12 +184,6 @@ def get_args_parser():
 
 
 def main(args):
-    # utils.setup_default_logging()
-    utils.init_distributed_mode(args)
-
-    output_dir = Path(args.output_dir)
-    logger = utils.create_logger(output_dir,dist_rank=utils.get_rank())
-    logger.info(args)
 
     device = torch.device(args.device)
 
@@ -201,50 +195,6 @@ def main(args):
 
     cudnn.benchmark = True
 
-    dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
-    dataset_val, _ = build_dataset(is_train=False, args=args)
-
-    if True:  # args.distributed:
-        num_tasks = utils.get_world_size()
-        global_rank = utils.get_rank()
-        if args.repeated_aug:
-            sampler_train = RASampler(
-                dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
-            )
-        else:
-            sampler_train = torch.utils.data.DistributedSampler(
-                dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
-            )
-        if args.dist_eval:
-            if len(dataset_val) % num_tasks != 0:
-                logger.info('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
-                      'This will slightly alter validation results as extra duplicate entries are added to achieve '
-                      'equal num of samples per-process.')
-            sampler_val = torch.utils.data.DistributedSampler(
-                dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-        else:
-            sampler_val = torch.utils.data.SequentialSampler(dataset_val)
-    else:
-        sampler_train = torch.utils.data.RandomSampler(dataset_train)
-        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
-
-    # leveraging MultiEpochsDataLoader for faster data loading
-    data_loader_train = MultiEpochsDataLoader(
-        dataset_train, sampler=sampler_train,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        pin_memory=args.pin_mem,
-        drop_last=True,
-        
-    )
-
-    data_loader_val = MultiEpochsDataLoader(
-        dataset_val, sampler=sampler_val,
-        batch_size=int(1 * args.batch_size),
-        num_workers=args.num_workers,
-        pin_memory=args.pin_mem,
-        drop_last=False
-    )
 
     mixup_fn = None
     mixup_active = args.mixup > 0 or args.cutmix > 0. or args.cutmix_minmax is not None
@@ -252,14 +202,14 @@ def main(args):
         mixup_fn = Mixup(
             mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
             prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
-            label_smoothing=args.smoothing, num_classes=args.nb_classes)
+            label_smoothing=args.smoothing, num_classes=1000)
     
     
-    logger.info(f"Creating model: {args.model}")
+    print(f"Creating model: {args.model}")
     model = create_model(
         args.model,
         pretrained=True,
-        num_classes=args.nb_classes,
+        num_classes=1000,
         drop_rate=args.drop,
         drop_path_rate=args.drop_path,
         drop_block_rate=None,
@@ -276,15 +226,25 @@ def main(args):
     else:
         raise ValueError("only support deit, mae and caformer in this codebase")
     
+#    model_name_dict = {
+#        'vit_deit_tiny_patch16_224':'ViT-T-DeiT',
+#        'vit_deit_small_patch16_224':'ViT-S-DeiT',
+#        'vit_deit_base_patch16_224': 'ViT-B-DeiT',
+#        'vit_base_patch16_mae': 'ViT-B-MAE',
+#        'vit_large_patch16_mae': 'ViT-L-MAE',
+#        'vit_huge_patch14_mae': 'ViT-H-MAE',
+#        'caformer_s36':'CAFormer-S36',
+#    }
     model_name_dict = {
-        'vit_deit_tiny_patch16_224':'ViT-T-DeiT',
-        'vit_deit_small_patch16_224':'ViT-S-DeiT',
-        'vit_deit_base_patch16_224': 'ViT-B-DeiT',
+        'deit_tiny_patch16_224':'ViT-T-DeiT',
+        'deit_small_patch16_224':'ViT-S-DeiT',
+        'deit_base_patch16_224': 'ViT-B-DeiT',
         'vit_base_patch16_mae': 'ViT-B-MAE',
         'vit_large_patch16_mae': 'ViT-L-MAE',
         'vit_huge_patch14_mae': 'ViT-H-MAE',
         'caformer_s36':'CAFormer-S36',
     }
+
     if args.load_compression_rate:
         with open('compression_rate.json', 'r') as f:
             compression_rate = json.load(f) 
@@ -294,148 +254,25 @@ def main(args):
             prune_kept_num = eval(compression_rate[model_name][str(args.target_flops)]['prune_kept_num'])
             merge_kept_num = eval(compression_rate[model_name][str(args.target_flops)]['merge_kept_num'])
             model.set_kept_num(prune_kept_num, merge_kept_num)
-            
-            
-        
-    
 
-    if args.finetune:
-        if args.finetune.startswith('https'):
-            checkpoint = torch.hub.load_state_dict_from_url(
-                args.finetune, map_location='cpu', check_hash=True)
-        else:
-            checkpoint = torch.load(args.finetune, map_location='cpu')
-
-        checkpoint_model = checkpoint['model']
-        state_dict = model.state_dict()
-        for k in ['head.weight', 'head.bias', 'head_dist.weight', 'head_dist.bias']:
-            if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
-                logger.info(f"Removing key {k} from pretrained checkpoint")
-                del checkpoint_model[k]
-
-        # interpolate position embedding
-        pos_embed_checkpoint = checkpoint_model['pos_embed']
-        embedding_size = pos_embed_checkpoint.shape[-1]
-        num_patches = model.patch_embed.num_patches
-        num_extra_tokens = model.pos_embed.shape[-2] - num_patches
-        # height (== width) for the checkpoint position embedding
-        orig_size = int((pos_embed_checkpoint.shape[-2] - num_extra_tokens) ** 0.5)
-        # height (== width) for the new position embedding
-        new_size = int(num_patches ** 0.5)
-        # class_token and dist_token are kept unchanged
-        extra_tokens = pos_embed_checkpoint[:, :num_extra_tokens]
-        # only the position tokens are interpolated
-        pos_tokens = pos_embed_checkpoint[:, num_extra_tokens:]
-        pos_tokens = pos_tokens.reshape(-1, orig_size, orig_size, embedding_size).permute(0, 3, 1, 2)
-        pos_tokens = torch.nn.functional.interpolate(
-            pos_tokens, size=(new_size, new_size), mode='bicubic', align_corners=False)
-        pos_tokens = pos_tokens.permute(0, 2, 3, 1).flatten(1, 2)
-        new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
-        checkpoint_model['pos_embed'] = new_pos_embed
-        model.load_state_dict(checkpoint_model, strict=False)
 
     model.to(device)
 
-    model_without_ddp = model
-    if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-        model_without_ddp = model.module
-    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f'number of params: {n_parameters}')
+#    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+#    logger.info(f'number of params: {n_parameters}')
 
-    linear_scaled_lr = args.lr * args.batch_size * utils.get_world_size() / 512.0
-    args.lr = linear_scaled_lr
-
-
-    if args.eval:
-        test_stats = evaluate(data_loader_val, model, device,logger)
-        logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
-        return
-    
-
-    optimizer = torch.optim.AdamW(model_without_ddp.arch_parameters(), lr=args.arch_lr,weight_decay=0)
-    loss_scaler = utils.NativeScalerWithGradNormCount()
-    lr_scheduler = CosineLRScheduler(optimizer, t_initial=args.epochs, lr_min=args.arch_min_lr, decay_rate=args.decay_rate )
-
-
-
-    criterion = LabelSmoothingCrossEntropy()
-
-    if mixup_active:
-        # smoothing is handled with mixup label transform
-        criterion = SoftTargetCrossEntropy()
-    elif args.smoothing:
-        criterion = LabelSmoothingCrossEntropy(smoothing=args.smoothing)
-    else:
-        criterion = torch.nn.CrossEntropyLoss()
-
-    
-    if args.autoresume and os.path.exists(os.path.join(args.output_dir, 'checkpoint.pth')):
-        args.resume = os.path.join(args.output_dir, 'checkpoint.pth')
-    if args.resume:
-        if args.resume.startswith('https'):
-            checkpoint = torch.hub.load_state_dict_from_url(
-                args.resume, map_location='cpu', check_hash=True)
-        else:
-            checkpoint = torch.load(args.resume, map_location='cpu')
-        model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
-        if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-            args.start_epoch = checkpoint['epoch'] + 1
-            if 'scaler' in checkpoint:
-                loss_scaler.load_state_dict(checkpoint['scaler'])
-
-
-    logger.info(f"Start training for {args.epochs} epochs")
-    start_time = time.time()
-    max_accuracy = 0.0
-    for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            data_loader_train.sampler.set_epoch(epoch)
-
-        train_stats = train_one_epoch(
-            model, criterion, data_loader_train,
-            optimizer,device, epoch, loss_scaler,
-            args.clip_grad, mixup_fn,
-            set_training_mode=args.finetune == '',  # keep in eval mode during finetuning
-            logger=logger, 
-            target_flops=args.target_flops,
-            warm_up=args.warmup_compression_rate
+    batch_size = 8
+    throughput = DiffRate.utils.benchmark(
+            model,
+            device=device,
+            verbose=True,
+            runs=50,
+            batch_size=batch_size,
         )
+    print(f"Batch size: {batch_size}")
+    print(f"Throughput: {throughput}%")
 
-        lr_scheduler.step(epoch)
-        if args.output_dir:
-            checkpoint_paths = [output_dir / 'checkpoint.pth']
-            for checkpoint_path in checkpoint_paths:
-                utils.save_on_master({
-                    'model': model_without_ddp.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'epoch': epoch,
-                    'scaler': loss_scaler.state_dict(),
-                    'args': args,
-                }, checkpoint_path)
 
-        test_stats = evaluate(data_loader_val, model, device,logger=logger)
-        logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
-        if utils.is_main_process() and max_accuracy < test_stats['acc1'] :
-            shutil.copyfile(checkpoint_path, f'{args.output_dir}/model_best.pth')
-        max_accuracy = max(max_accuracy, test_stats["acc1"])
-        logger.info(f'Max accuracy: {max_accuracy:.2f}%')
-
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                     **{f'test_{k}': v for k, v in test_stats.items()},
-                     'epoch': epoch,
-                     'n_parameters': n_parameters}
-
-        if args.output_dir and utils.is_main_process():
-            with (output_dir / "log.txt").open("a") as f:
-                f.write(json.dumps(log_stats) + "\n")
-
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    logger.info('Training time {}'.format(total_time_str))
 
 
 if __name__ == '__main__':
