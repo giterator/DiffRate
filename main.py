@@ -31,6 +31,7 @@ import models_mae
 import caformer
 import DiffRate
 
+from typing import List, Tuple, Union
 
 warnings.filterwarnings('ignore')
 
@@ -185,7 +186,7 @@ def get_args_parser():
 
 def main(args):
 
-    device = torch.device(args.device)
+    device = torch.device("cpu")
 
     # fix the seed for reproducibility
     seed = args.seed + utils.get_rank()
@@ -261,12 +262,12 @@ def main(args):
 #    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
 #    logger.info(f'number of params: {n_parameters}')
 
-    batch_size = 8
-    throughput = DiffRate.utils.benchmark(
+    batch_size = 1
+    throughput = cpu_benchmark(
             model,
             device=device,
             verbose=True,
-            runs=50,
+            runs=200,
             batch_size=batch_size,
         )
     print(f"Batch size: {batch_size}")
@@ -274,6 +275,62 @@ def main(args):
 
 
 
+def cpu_benchmark(
+    model: torch.nn.Module,
+    device: torch.device = 0,
+    input_size: Tuple[int] = (3, 224, 224),
+    batch_size: int = 64,
+    runs: int = 40,
+    throw_out: float = 0.25,
+    use_fp16: bool = False,
+    verbose: bool = False,
+) -> float:
+    """
+    Benchmark the given model with random inputs at the given batch size.
+
+    Args:
+     - model: the module to benchmark
+     - device: the device to use for benchmarking
+     - input_size: the input size to pass to the model (channels, h, w)
+     - batch_size: the batch size to use for evaluation
+     - runs: the number of total runs to do
+     - throw_out: the percentage of runs to throw out at the start of testing
+     - use_fp16: whether or not to benchmark with float16 and autocast
+     - verbose: whether or not to use tqdm to print progress / print throughput at end
+
+    Returns:
+     - the throughput measured in images / second
+    """
+    if not isinstance(device, torch.device):
+        device = torch.device(device)
+
+    print("Device: ", device)
+
+    model = model.eval().to(device)
+    input = torch.rand(batch_size, *input_size, device=device)
+
+    warm_up = int(runs * throw_out)
+    total = 0
+    start = time.time()
+
+    with torch.no_grad():
+        for i in range(runs):
+            if i == warm_up:
+                total = 0
+                start = time.time()
+            model(input)
+            total += batch_size
+
+
+    end = time.time()
+    elapsed = end - start
+
+    throughput = total / elapsed
+
+    if verbose:
+        print(f"Throughput: {throughput:.2f} im/s")
+
+    return throughput
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DeiT training and evaluation script', parents=[get_args_parser()])
