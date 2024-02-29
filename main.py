@@ -325,12 +325,15 @@ def cpu_benchmark(
     end = time.time()
     elapsed = end - start
 
+    latency = elapsed * batch_size / total #per batch
+
     throughput = total / elapsed
 
     if verbose:
-        print(f"Throughput: {throughput:.2f} im/s")
+        print(f"Latency: {latency:.2f} s, Throughput: {throughput:.2f} im/s")
 
-    return throughput
+    return latency, throughput
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DeiT training and evaluation script', parents=[get_args_parser()])
