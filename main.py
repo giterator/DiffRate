@@ -261,7 +261,7 @@ def main(args):
 #    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
 #    logger.info(f'number of params: {n_parameters}')
 
-    batch_size = 8
+    batch_size = 1
     throughput = DiffRate.utils.benchmark(
             model,
             device=device,
