@@ -250,7 +250,7 @@ def make_diffrate_class(transformer_class):
                 #     N = ste_min(N, prune_kept_number, merge_kept_number)
                 #     ffn_flops = 8*N*C*C
                 #     flops += ffn_flops
-                for merge_kept_number in zip(self._diffrate_info["merge_kept_num"]):
+                for merge_kept_number in self._diffrate_info["merge_kept_num"]:
                     # translate fp16 to fp32 for stable training    
                     merge_kept_number = merge_kept_number.float()
                     mhsa_flops = 4*N*C*C + 2*N*N*C
