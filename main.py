@@ -268,7 +268,8 @@ def main(args):
     
     # DiffRate Patch
     if 'deit' in args.model:
-        DiffRate.patch.deit(model, prune_granularity=args.granularity, merge_granularity=args.granularity)
+        # DiffRate.patch.deit(model, prune_granularity=args.granularity, merge_granularity=args.granularity)
+        DiffRate.patch.deit(model, merge_granularity=args.granularity)
     elif 'mae' in args.model:
         DiffRate.patch.mae(model, prune_granularity=args.granularity, merge_granularity=args.granularity)
     elif 'caformer' in args.model:
@@ -291,9 +292,10 @@ def main(args):
             model_name = model_name_dict[args.model]
             if not str(args.target_flops) in compression_rate[model_name]:
                 raise ValueError(f"compression_rate.json does not contaion {model_name} with {args.target_flops}G flops")
-            prune_kept_num = eval(compression_rate[model_name][str(args.target_flops)]['prune_kept_num'])
+            # prune_kept_num = eval(compression_rate[model_name][str(args.target_flops)]['prune_kept_num'])
             merge_kept_num = eval(compression_rate[model_name][str(args.target_flops)]['merge_kept_num'])
-            model.set_kept_num(prune_kept_num, merge_kept_num)
+            # model.set_kept_num(prune_kept_num, merge_kept_num)
+            model.set_kept_num(merge_kept_num)
             
             
         

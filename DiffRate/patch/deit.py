@@ -31,8 +31,8 @@ class DiffRateBlock(Block):
      - Apply DiffRate between the attention and mlp blocks
      - Compute and propogate token size and potentially the token sources.
     """
-    def introduce_diffrate(self,patch_number, prune_granularity, merge_granularity):
-        self.prune_ddp = DiffRate(patch_number,prune_granularity)
+    def introduce_diffrate(self,patch_number, merge_granularity):
+        # self.prune_ddp = DiffRate(patch_number,prune_granularity)
         self.merge_ddp = DiffRate(patch_number,merge_granularity)
         
     
@@ -45,30 +45,32 @@ class DiffRateBlock(Block):
         x = x + self.drop_path(x_attn)
 
         # importance metric
-        cls_attn = attn[:, :, 0, 1:]
-        cls_attn = cls_attn.mean(dim=1)  # [B, N-1]
-        _, idx = torch.sort(cls_attn, descending=True)
-        cls_index = torch.zeros((B,1), device=idx.device).long()
-        idx = torch.cat((cls_index, idx+1), dim=1)
+        # cls_attn = attn[:, :, 0, 1:]
+        # cls_attn = cls_attn.mean(dim=1)  # [B, N-1]
+        # _, idx = torch.sort(cls_attn, descending=True)
+        # cls_index = torch.zeros((B,1), device=idx.device).long()
+        # idx = torch.cat((cls_index, idx+1), dim=1)
         
         # sorting
-        x = torch.gather(x, dim=1, index=idx.unsqueeze(-1).expand(-1, -1, x.shape[-1]))
-        self._diffrate_info["size"] = torch.gather(self._diffrate_info["size"], dim=1, index=idx.unsqueeze(-1))
-        mask = torch.gather( mask, dim=1, index=idx)
-        if self._diffrate_info["trace_source"]:
-            self._diffrate_info["source"] = torch.gather(self._diffrate_info["source"], dim=1, index=idx.unsqueeze(-1).expand(-1, -1, self._diffrate_info["source"].shape[-1]))
+        # x = torch.gather(x, dim=1, index=idx.unsqueeze(-1).expand(-1, -1, x.shape[-1]))
+        # self._diffrate_info["size"] = torch.gather(self._diffrate_info["size"], dim=1, index=idx.unsqueeze(-1))
+        # mask = torch.gather( mask, dim=1, index=idx)
+        # if self._diffrate_info["trace_source"]:
+        #     self._diffrate_info["source"] = torch.gather(self._diffrate_info["source"], dim=1, index=idx.unsqueeze(-1).expand(-1, -1, self._diffrate_info["source"].shape[-1]))
 
         
         if self.training:
             # pruning, pruning only needs to generate masks during training
             last_token_number = mask[0].sum().int()
-            prune_kept_num = self.prune_ddp.update_kept_token_number()      # expected prune compression rate, has gradiet
-            self._diffrate_info["prune_kept_num"].append(prune_kept_num)
-            if prune_kept_num < last_token_number:        # make sure the kept token number is a decreasing sequence
-                prune_mask = self.prune_ddp.get_token_mask(last_token_number)
-                mask = mask * prune_mask.expand(B, -1)
+            # prune_kept_num = self.prune_ddp.update_kept_token_number()      # expected prune compression rate, has gradiet
+            # self._diffrate_info["prune_kept_num"].append(prune_kept_num)
+            # if prune_kept_num < last_token_number:        # make sure the kept token number is a decreasing sequence
+            #     prune_mask = self.prune_ddp.get_token_mask(last_token_number)
+            #     mask = mask * prune_mask.expand(B, -1)
 
-            mid_token_number = min(last_token_number, int(prune_kept_num)) # token number after pruning
+            # mid_token_number = min(last_token_number, int(prune_kept_num)) # token number after pruning
+
+            mid_token_number = last_token_number
                 
             # merging
             merge_kept_num = self.merge_ddp.update_kept_token_number()
@@ -92,16 +94,16 @@ class DiffRateBlock(Block):
             
         else:
             # pruning
-            prune_kept_num = self.prune_ddp.kept_token_number
-            x = x[:, :prune_kept_num]
-            self._diffrate_info["size"] = self._diffrate_info["size"][:, :prune_kept_num]
-            if self._diffrate_info["trace_source"]:
-                self._diffrate_info["source"] = self._diffrate_info["source"][:, :prune_kept_num]
+            # prune_kept_num = self.prune_ddp.kept_token_number
+            # x = x[:, :prune_kept_num]
+            # self._diffrate_info["size"] = self._diffrate_info["size"][:, :prune_kept_num]
+            # if self._diffrate_info["trace_source"]:
+            #     self._diffrate_info["source"] = self._diffrate_info["source"][:, :prune_kept_num]
                 
             
             # merging
             merge_kept_num = self.merge_ddp.kept_token_number
-            if merge_kept_num < prune_kept_num:
+            if merge_kept_num < N: #prune_kept_num:
                 merge,node_max = get_merge_func(x.detach(), kept_number=merge_kept_num)
                 x = merge(x,mode='mean')
                 # optimize proportional attention in ToMe by considering similarity, this is benefit to the accuracy of off-the-shelf model.
@@ -181,7 +183,7 @@ def make_diffrate_class(transformer_class):
             B = x.shape[0]
             self._diffrate_info["size"] = torch.ones([B,self.patch_embed.num_patches+1,1], device=x.device)
             self._diffrate_info["mask"] =  torch.ones((B,self.patch_embed.num_patches+1),device=x.device)
-            self._diffrate_info["prune_kept_num"] = []
+            # self._diffrate_info["prune_kept_num"] = []
             self._diffrate_info["merge_kept_num"] = []
             if self._diffrate_info["trace_source"]:
                 self._diffrate_info["source"] = torch.eye(self.patch_embed.num_patches+1, device=x.device)[None, ...].expand(B, self.patch_embed.num_patches+1, self.patch_embed.num_patches+1)
@@ -212,35 +214,48 @@ def make_diffrate_class(transformer_class):
             return iter(params)    
 
         def get_kept_num(self):
-            prune_kept_num = []
+            # prune_kept_num = []
             merge_kept_num = []
             for block in self.blocks:
-                prune_kept_num.append(int(block.prune_ddp.kept_token_number))
+                # prune_kept_num.append(int(block.prune_ddp.kept_token_number))
                 merge_kept_num.append(int(block.merge_ddp.kept_token_number))
-            return prune_kept_num, merge_kept_num
+            return merge_kept_num #prune_kept_num, merge_kept_num
                 
 
-        def set_kept_num(self, prune_kept_numbers, merge_kept_numbers):
-            assert len(prune_kept_numbers) == len(self.blocks) and len(merge_kept_numbers) == len(self.blocks)
-            for block, prune_kept_number, merge_kept_number in zip(self.blocks, prune_kept_numbers, merge_kept_numbers):
-                block.prune_ddp.kept_token_number = prune_kept_number
+        # def set_kept_num(self, prune_kept_numbers, merge_kept_numbers):
+        def set_kept_num(self, merge_kept_numbers):
+            # assert len(prune_kept_numbers) == len(self.blocks) and len(merge_kept_numbers) == len(self.blocks)
+            len(merge_kept_numbers) == len(self.blocks)
+            # for block, prune_kept_number, merge_kept_number in zip(self.blocks, prune_kept_numbers, merge_kept_numbers):
+            #     block.prune_ddp.kept_token_number = prune_kept_number
+            #     block.merge_ddp.kept_token_number = merge_kept_number
+            for block, merge_kept_number in zip(self.blocks, merge_kept_numbers):
                 block.merge_ddp.kept_token_number = merge_kept_number
         
         def calculate_flop_training(self):
             C = self.embed_dim
             patch_number = float(self.patch_embed.num_patches)
-            N = torch.tensor(patch_number+1, device=self.blocks[0].prune_ddp.selected_probability.device)
+            # N = torch.tensor(patch_number+1, device=self.blocks[0].prune_ddp.selected_probability.device)
+            N = torch.tensor(patch_number+1, device=self.blocks[0].merge_ddp.selected_probability.device)
             flops = 0
             patch_embedding_flops = N*C*(self.patch_embed.patch_size[0]*self.patch_embed.patch_size[1]*3)
             classifier_flops = C*self.num_classes
             with torch.cuda.amp.autocast(enabled=False):
-                for prune_kept_number, merge_kept_number in zip(self._diffrate_info["prune_kept_num"],self._diffrate_info["merge_kept_num"]):
-                    # translate fp16 to fp32 for stable training
-                    prune_kept_number = prune_kept_number.float()     
+                # for prune_kept_number, merge_kept_number in zip(self._diffrate_info["prune_kept_num"],self._diffrate_info["merge_kept_num"]):
+                #     # translate fp16 to fp32 for stable training
+                #     prune_kept_number = prune_kept_number.float()     
+                #     merge_kept_number = merge_kept_number.float()
+                #     mhsa_flops = 4*N*C*C + 2*N*N*C
+                #     flops += mhsa_flops
+                #     N = ste_min(N, prune_kept_number, merge_kept_number)
+                #     ffn_flops = 8*N*C*C
+                #     flops += ffn_flops
+                for merge_kept_number in zip(self._diffrate_info["merge_kept_num"]):
+                    # translate fp16 to fp32 for stable training    
                     merge_kept_number = merge_kept_number.float()
                     mhsa_flops = 4*N*C*C + 2*N*N*C
                     flops += mhsa_flops
-                    N = ste_min(N, prune_kept_number, merge_kept_number)
+                    N = ste_min(N, merge_kept_number)
                     ffn_flops = 8*N*C*C
                     flops += ffn_flops
             flops += patch_embedding_flops
@@ -250,17 +265,18 @@ def make_diffrate_class(transformer_class):
         def calculate_flop_inference(self):
             C = self.embed_dim
             patch_number = float(self.patch_embed.num_patches)
-            N = torch.tensor(patch_number+1, device=self.blocks[0].prune_ddp.selected_probability.device)
+            # N = torch.tensor(patch_number+1, device=self.blocks[0].prune_ddp.selected_probability.device)
+            N = torch.tensor(patch_number+1, device=self.blocks[0].merge_ddp.selected_probability.device)
             flops = 0
             patch_embedding_flops = N*C*(self.patch_embed.patch_size[0]*self.patch_embed.patch_size[1]*3)
             classifier_flops = C*self.num_classes
             with torch.cuda.amp.autocast(enabled=False):
                 for block in (self.blocks):
-                    prune_kept_number = block.prune_ddp.kept_token_number
+                    # prune_kept_number = block.prune_ddp.kept_token_number
                     merge_kept_number = block.merge_ddp.kept_token_number
                     mhsa_flops = 4*N*C*C + 2*N*N*C
                     flops += mhsa_flops
-                    N = ste_min(N, prune_kept_number, merge_kept_number)
+                    N = ste_min(N, merge_kept_number)
                     ffn_flops = 8*N*C*C
                     flops += ffn_flops
             flops += patch_embedding_flops
@@ -272,7 +288,8 @@ def make_diffrate_class(transformer_class):
 
 
 def apply_patch(
-    model: VisionTransformer, trace_source: bool = False,prune_granularity=1, merge_granularity=1
+    # model: VisionTransformer, trace_source: bool = False,prune_granularity=1, merge_granularity=1
+    model: VisionTransformer, trace_source: bool = False,merge_granularity=1
 ):
     """
     Applies DiffRate to this transformer.
@@ -294,9 +311,9 @@ def apply_patch(
         if isinstance(module, Block):
             module.__class__ = DiffRateBlock
             if block_index in non_compressed_block_index:
-                module.introduce_diffrate(model.patch_embed.num_patches, model.patch_embed.num_patches+1, model.patch_embed.num_patches+1)
+                module.introduce_diffrate(model.patch_embed.num_patches, model.patch_embed.num_patches+1)
             else:
-                module.introduce_diffrate(model.patch_embed.num_patches, prune_granularity, merge_granularity)
+                module.introduce_diffrate(model.patch_embed.num_patches, merge_granularity)
             block_index += 1
             module._diffrate_info = model._diffrate_info
         elif isinstance(module, Attention):

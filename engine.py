@@ -66,10 +66,12 @@ def train_one_epoch(model: torch.nn.Module, criterion,
 
         if data_iter_step%compression_rate_print_freq == 0:
             if hasattr(model, 'module'):  # for DDP 
-                prune_kept_num, merge_kept_num = model.module.get_kept_num()
+                # prune_kept_num, merge_kept_num = model.module.get_kept_num()
+                merge_kept_num = model.module.get_kept_num()
             else:
-                prune_kept_num, merge_kept_num = model.get_kept_num()
-            logger.info(f'prune kept number:{prune_kept_num}')
+                # prune_kept_num, merge_kept_num = model.get_kept_num()
+                merge_kept_num = model.get_kept_num()
+            # logger.info(f'prune kept number:{prune_kept_num}')
             logger.info(f'merge kept number:{merge_kept_num}')
 
 
@@ -112,10 +114,12 @@ def evaluate(data_loader, model, device,logger=None):
         metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
         metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
     if hasattr(model, 'module'):  # for DDP 
-        prune_kept_num, merge_kept_num = model.module.get_kept_num()
+        # prune_kept_num, merge_kept_num = model.module.get_kept_num()
+        merge_kept_num = model.module.get_kept_num()
     else:
-        prune_kept_num, merge_kept_num = model.get_kept_num()
-    logger.info(f'prune kept number:{prune_kept_num}')
+        # prune_kept_num, merge_kept_num = model.get_kept_num()
+        merge_kept_num = model.get_kept_num()
+    # logger.info(f'prune kept number:{prune_kept_num}')
     logger.info(f'merge kept number:{merge_kept_num}')
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
