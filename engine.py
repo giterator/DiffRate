@@ -21,6 +21,11 @@ def train_one_epoch(model: torch.nn.Module, criterion,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0, mixup_fn: Optional[Mixup] = None,
                     set_training_mode=True,logger=None,target_flops=3.0,warm_up=False):
     model.train(set_training_mode)
+    # model.eval()
+    for name, param in model.named_parameters():
+        if not "selected_probability" in name:  # Check if the parameter is a weight
+            param.requires_grad = False
+            
     # model.train(False)      # finetune
     metric_logger = utils.MetricLogger(delimiter="  ")
     # metric_logger.add_meter('lr_weight', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -61,7 +66,7 @@ def train_one_epoch(model: torch.nn.Module, criterion,
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
         grad_norm = loss_scaler(loss, optimizer, clip_grad=max_norm,
-                    parameters=model.module.arch_parameters(), create_graph=is_second_order)
+                    parameters=model.arch_parameters(), create_graph=is_second_order)
         torch.cuda.synchronize()
 
         if data_iter_step%compression_rate_print_freq == 0:
