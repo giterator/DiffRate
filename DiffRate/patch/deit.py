@@ -306,7 +306,7 @@ def apply_patch(
     }
 
     block_index = 0
-    non_compressed_block_index = [0]
+    non_compressed_block_index = [0,1,2,4,5,7,8,10,11] #compress at 3,6,9
     for module in model.modules():
         if isinstance(module, Block):
             module.__class__ = DiffRateBlock
