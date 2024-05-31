@@ -17,7 +17,7 @@ import torch.nn as nn
 
 # import DiffRate.ddp as ddp
 from DiffRate.ddp import DiffRate
-from DiffRate.merge import get_merge_func
+from DiffRate.merge import bipartite_soft_matching, merge_wavg, merge_source #get_merge_func
 
 from DiffRate.utils import ste_min
 
@@ -41,7 +41,7 @@ class DiffRateBlock(Block):
         # Note: this is copied from timm.models.vision_transformer.Block with modifications.
         size = self._diffrate_info["size"]
         mask = self._diffrate_info["mask"]
-        x_attn, attn = self.attn(self.norm1(x), size, mask=self._diffrate_info["mask"])
+        x_attn, metric = self.attn(self.norm1(x), size, mask=self._diffrate_info["mask"])
         x = x + self.drop_path(x_attn)
 
         # importance metric
@@ -70,24 +70,31 @@ class DiffRateBlock(Block):
 
             # mid_token_number = min(last_token_number, int(prune_kept_num)) # token number after pruning
 
+
+            # DiffRate merging
             mid_token_number = last_token_number
-                
-            # merging
+
             merge_kept_num = self.merge_ddp.update_kept_token_number()
             self._diffrate_info["merge_kept_num"].append(merge_kept_num)
 
             if merge_kept_num < mid_token_number:
-                merge_mask = self.merge_ddp.get_token_mask(mid_token_number)
-                x_compressed, size_compressed = x[:, mid_token_number:], self._diffrate_info["size"][:,mid_token_number:]
-                merge_func, node_max = get_merge_func(metric=x[:, :mid_token_number].detach(), kept_number=int(merge_kept_num))
-                x = merge_func(x[:,:mid_token_number],  mode="mean", training=True)
-                # optimize proportional attention in ToMe by considering similarity
-                size = torch.cat((self._diffrate_info["size"][:, :int(merge_kept_num)],self._diffrate_info["size"][:, int(merge_kept_num):mid_token_number]*node_max[..., None]),dim=1)
-                size = size.clamp(1)
-                size = merge_func(size,  mode="sum", training=True)
-                x = torch.cat([x, x_compressed], dim=1)
-                self._diffrate_info["size"] = torch.cat([size, size_compressed], dim=1)
-                mask = mask * merge_mask
+                merge_mask = self.merge_ddp.get_token_mask(mid_token_number) # Is this needed?
+                # x_compressed, size_compressed = x[:, mid_token_number:], self._diffrate_info["size"][:,mid_token_number:] #should be no difference since pruning is disabled
+
+                # merge_func, node_max = get_merge_func(metric=x[:, :mid_token_number].detach(), kept_number=int(merge_kept_num))
+                merge, _ = bipartite_soft_matching(metric=metric, r= mid_token_number - int(merge_kept_num), class_token=True)
+
+                x, self._diffrate_info["size"] = merge_wavg(merge, x, self._diffrate_info["size"])
+
+                # x = merge_func(x[:,:mid_token_number],  mode="mean", training=True)
+                # # optimize proportional attention in ToMe by considering similarity
+                # size = torch.cat((self._diffrate_info["size"][:, :int(merge_kept_num)],self._diffrate_info["size"][:, int(merge_kept_num):mid_token_number]*node_max[..., None]),dim=1)
+                # size = size.clamp(1)
+                # size = merge_func(size,  mode="sum", training=True)
+                # x = torch.cat([x, x_compressed], dim=1)
+                # self._diffrate_info["size"] = torch.cat([size, size_compressed], dim=1)
+
+                mask = mask * merge_mask #Is this needed?
 
             self._diffrate_info["mask"] = mask
             x = x + self.drop_path(self.mlp(self.norm2(x)))
@@ -101,16 +108,23 @@ class DiffRateBlock(Block):
             #     self._diffrate_info["source"] = self._diffrate_info["source"][:, :prune_kept_num]
                 
             
-            # merging
+            # DiffRate merging
             merge_kept_num = self.merge_ddp.kept_token_number
             if merge_kept_num < N: #prune_kept_num:
-                merge,node_max = get_merge_func(x.detach(), kept_number=merge_kept_num)
-                x = merge(x,mode='mean')
-                # optimize proportional attention in ToMe by considering similarity, this is benefit to the accuracy of off-the-shelf model.
-                self._diffrate_info["size"] = torch.cat((self._diffrate_info["size"][:, :merge_kept_num],self._diffrate_info["size"][:, merge_kept_num:]*node_max[..., None] ),dim=1)
-                self._diffrate_info["size"] = merge(self._diffrate_info["size"], mode='sum')
+                # merge,node_max = get_merge_func(x.detach(), kept_number=merge_kept_num)
+                # x = merge(x,mode='mean')
+                # # optimize proportional attention in ToMe by considering similarity, this is benefit to the accuracy of off-the-shelf model.
+                # self._diffrate_info["size"] = torch.cat((self._diffrate_info["size"][:, :merge_kept_num],self._diffrate_info["size"][:, merge_kept_num:]*node_max[..., None] ),dim=1)
+                # self._diffrate_info["size"] = merge(self._diffrate_info["size"], mode='sum')
+
+                merge, _ = bipartite_soft_matching(metric=metric, r= N - int(merge_kept_num), class_token=True)
+                x, self._diffrate_info["size"] = merge_wavg(merge, x, self._diffrate_info["size"])
+            
                 if self._diffrate_info["trace_source"]:
-                    self._diffrate_info["source"] = merge(self._diffrate_info["source"], mode="amax")
+                    self._diffrate_info["source"] = merge_source(merge, x, self._diffrate_info["source"])
+
+
+
 
             x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
@@ -174,7 +188,7 @@ class DiffRateAttention(Attention):
         x = self.proj_drop(x)
 
         # Return attention map as well here
-        return x, attn
+        return x, k.mean(1)
 
 
 def make_diffrate_class(transformer_class):
