@@ -56,7 +56,7 @@ def bipartite_soft_matching(
             # Sort to ensure the class token is at the start
             unm_idx = unm_idx.sort(dim=1)[0]
 
-    def merge(x: torch.Tensor, mode="mean", training=False) -> torch.Tensor:
+    def merge(x: torch.Tensor, mode="mean", training=True) -> torch.Tensor:
         src, dst = x[..., ::2, :], x[..., 1::2, :]
         n, t1, c = src.shape
         unm = src.gather(dim=-2, index=unm_idx.expand(n, t1 - r, c))
@@ -65,8 +65,8 @@ def bipartite_soft_matching(
 
         if training:
             return torch.cat([unm, dst, src], dim=1) 
-            #src needs to be masked out in training -> need to change mask ????
-            # Or maybe dont even include src if mask is not needed?
+            #src needs to be masked out in training -> need to change mask ?
+            
     
         else:
             return torch.cat([unm, dst], dim=1)
@@ -89,7 +89,7 @@ def bipartite_soft_matching(
     return merge, unmerge
 
 def merge_wavg(
-    merge: Callable, x: torch.Tensor, size: torch.Tensor = None
+    merge: Callable, x: torch.Tensor, size: torch.Tensor = None, training= True
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Applies the merge function by taking a weighted average based on token size.
@@ -98,14 +98,14 @@ def merge_wavg(
     if size is None:
         size = torch.ones_like(x[..., 0, None])
 
-    x = merge(x * size, mode="sum")
-    size = merge(size, mode="sum")
+    x = merge(x * size, mode="sum", training=training)
+    size = merge(size, mode="sum", training=training)
 
     x = x / size
     return x, size
 
 def merge_source(
-    merge: Callable, x: torch.Tensor, source: torch.Tensor = None
+    merge: Callable, x: torch.Tensor, source: torch.Tensor = None, training=False
 ) -> torch.Tensor:
     """
     For source tracking. Source is an adjacency matrix between the initial tokens and final merged groups.
@@ -115,7 +115,7 @@ def merge_source(
         n, t, _ = x.shape
         source = torch.eye(t, device=x.device)[None, ...].expand(n, t, t)
 
-    source = merge(source, mode="amax")
+    source = merge(source, mode="amax", training=training)
     return source
 
 # def get_merge_func(metric: torch.Tensor, kept_number: int, class_token: bool = True):

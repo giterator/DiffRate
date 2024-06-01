@@ -4,4 +4,4 @@ python3 main.py \
 --data-path /home/datasets/imagenet/imagenet/ \
 --output_dir /home/pranav/ECCV_workshop/DiffRate/learnt/SMS \
 --model vit_deit_small_patch16_224 \
---target_flops 2.3
+--target_flops 2.5

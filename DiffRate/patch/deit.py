@@ -79,20 +79,20 @@ class DiffRateBlock(Block):
 
             if merge_kept_num < mid_token_number:
                 merge_mask = self.merge_ddp.get_token_mask(mid_token_number) # Is this needed?
-                # x_compressed, size_compressed = x[:, mid_token_number:], self._diffrate_info["size"][:,mid_token_number:] #should be no difference since pruning is disabled
+                x_compressed, size_compressed = x[:, mid_token_number:], self._diffrate_info["size"][:,mid_token_number:]
 
                 # merge_func, node_max = get_merge_func(metric=x[:, :mid_token_number].detach(), kept_number=int(merge_kept_num))
-                merge, _ = bipartite_soft_matching(metric=metric, r= mid_token_number - int(merge_kept_num), class_token=True)
+                merge, _ = bipartite_soft_matching(metric=metric[:, :mid_token_number].detach(), r= mid_token_number - int(merge_kept_num), class_token=True)
 
-                x, self._diffrate_info["size"] = merge_wavg(merge, x, self._diffrate_info["size"])
+                x, self._diffrate_info["size"] = merge_wavg(merge, x[:,:mid_token_number], self._diffrate_info["size"][:,:mid_token_number], training=True)
 
                 # x = merge_func(x[:,:mid_token_number],  mode="mean", training=True)
                 # # optimize proportional attention in ToMe by considering similarity
                 # size = torch.cat((self._diffrate_info["size"][:, :int(merge_kept_num)],self._diffrate_info["size"][:, int(merge_kept_num):mid_token_number]*node_max[..., None]),dim=1)
                 # size = size.clamp(1)
                 # size = merge_func(size,  mode="sum", training=True)
-                # x = torch.cat([x, x_compressed], dim=1)
-                # self._diffrate_info["size"] = torch.cat([size, size_compressed], dim=1)
+                x = torch.cat([x, x_compressed], dim=1)
+                self._diffrate_info["size"] = torch.cat([self._diffrate_info["size"], size_compressed], dim=1)
 
                 mask = mask * merge_mask #Is this needed?
 
@@ -117,11 +117,11 @@ class DiffRateBlock(Block):
                 # self._diffrate_info["size"] = torch.cat((self._diffrate_info["size"][:, :merge_kept_num],self._diffrate_info["size"][:, merge_kept_num:]*node_max[..., None] ),dim=1)
                 # self._diffrate_info["size"] = merge(self._diffrate_info["size"], mode='sum')
 
-                merge, _ = bipartite_soft_matching(metric=metric, r= N - int(merge_kept_num), class_token=True)
-                x, self._diffrate_info["size"] = merge_wavg(merge, x, self._diffrate_info["size"])
+                merge, _ = bipartite_soft_matching(metric=metric.detach(), r= N - int(merge_kept_num), class_token=True)
+                x, self._diffrate_info["size"] = merge_wavg(merge, x, self._diffrate_info["size"], training=False)
             
                 if self._diffrate_info["trace_source"]:
-                    self._diffrate_info["source"] = merge_source(merge, x, self._diffrate_info["source"])
+                    self._diffrate_info["source"] = merge_source(merge, x, self._diffrate_info["source"], training=False)
 
 
 
@@ -320,7 +320,7 @@ def apply_patch(
     }
 
     block_index = 0
-    non_compressed_block_index = [0,1,2,4,5,7,8,10,11] #compress at 3,6,9
+    non_compressed_block_index = [0,1,2,4,5,7,8,10,11] #compress at 3,6,9 # [0]
     for module in model.modules():
         if isinstance(module, Block):
             module.__class__ = DiffRateBlock

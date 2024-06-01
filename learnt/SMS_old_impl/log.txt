@@ -1,0 +1,1 @@
+{"train_lr_architecture": 0.009999999999999723, "train_loss_cls": 3.5866710511709954, "train_loss_flops": 0.40433564009390577, "train_flops": 2.9339103939340747, "train_grad_norm": NaN, "test_flops": 2.9864070415496826, "test_loss": 1.3340521910969092, "test_acc1": 74.372, "test_acc5": 91.066, "epoch": 0, "n_parameters": 22050664}
