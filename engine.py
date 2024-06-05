@@ -49,12 +49,70 @@ def train_one_epoch(model: torch.nn.Module, criterion,
             samples, targets = mixup_fn(samples, targets)
 
         with torch.cuda.amp.autocast():
-            outputs, flops = model(samples)
+            outputs, flops, sched = model(samples)
             loss_cls = criterion(outputs, targets)
             loss_flops = ((flops/1e9)-target_flops)**2
-            loss = lamb * loss_flops + loss_cls
+            
+            # clean_sched = [197]
+            # for k in sched:
+            #     clean_sched.append(int(k.item()))
+            
+            # merge_locs = 0
+            # reduction_sched = []
+            # for i in range(len(clean_sched)-1):
+            #     r = clean_sched[i] - clean_sched[i+1]
+            #     reduction_sched.append(r)
+            #     if r > 0:
+            #         merge_locs += 1
+
+            clean_sched = []
+            for k in sched:
+                clean_sched.append(int(k.item()))
+
+            reduction_sched = []
+            inp_tok = 197
+            merge_locs = 0
+            for k in clean_sched:
+                r = inp_tok - k
+                if r > 0:
+                    merge_locs += 1
+                    inp_tok -= r
+                    reduction_sched.append(r)
+                else:
+                    reduction_sched.append(0)
+
+            loss_tome = (merge_locs / 12.0) **2
+
+
+            def etrr(sched):
+                sum = 0
+                for i in range(len(sched)):
+                    layer = i+1
+                    sum += (sched[i] * (12-layer))
+                etrr = 100 * sum/(197*12)
+                return etrr
+            
+            etrr_val = etrr(reduction_sched)
+            etrr_loss = ((etrr_val - 25.0) / 100.0) **2
+
+            # print(sched)
+            # Loss terms MUST have grad func
+            # print(type(sched))
+
+            # loss = lamb * loss_flops + loss_cls
+            loss_tome = torch.tensor(loss_tome, dtype=sched[0].dtype, requires_grad=True)
+            # print(loss_tome)
+            loss_etrr_per_merge = merge_locs / etrr_val
+            alpha = 10
+            beta = 1
+            gamma = 0.1
+            loss = gamma * loss_cls + alpha * loss_etrr_per_merge #+ beta * etrr_loss #/ lamb #+ etrr_loss * lamb
             loss_cls_value = loss_cls.item()
             loss_flops_value = loss_flops.item()
+
+            loss_tome_value = loss_tome
+            
+            
         
         
         if not math.isfinite(loss_cls_value):
@@ -81,6 +139,9 @@ def train_one_epoch(model: torch.nn.Module, criterion,
 
 
         metric_logger.update(loss_cls=loss_cls_value)
+        metric_logger.update(loss_etrr_per_merge=loss_etrr_per_merge)
+        metric_logger.update(loss_tome=loss_tome_value)
+        metric_logger.update(etrr_loss=etrr_loss)
         metric_logger.update(loss_flops=loss_flops_value)
         metric_logger.update(flops=flops/1e9)
         metric_logger.update(grad_norm=grad_norm)
@@ -107,7 +168,7 @@ def evaluate(data_loader, model, device,logger=None):
 
         # compute output
         with torch.cuda.amp.autocast():
-            output, flops = model(images)
+            output, flops, sched = model(images)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))

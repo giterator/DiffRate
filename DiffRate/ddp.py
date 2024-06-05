@@ -4,7 +4,7 @@ Differentiable Discrte Proxy
 
 import torch.nn as nn
 import torch
-from DiffRate.utils import ste_ceil
+from DiffRate.utils import ste_ceil, ste_step
 
 
     
@@ -27,19 +27,38 @@ class DiffRate(nn.Module):
         self.kept_token_candidate.requires_grad_(False)
         self.selected_probability =  nn.Parameter(torch.zeros_like(self.kept_token_candidate))   
         self.selected_probability.requires_grad_(True)
+
+        ## LSMS
+        self.merge_prob =  nn.Parameter(torch.randn(1,1))
+        self.merge_prob.requires_grad_(True)
         
         # the learn target, which can be directly applied to the off-the-shlef pre-trained models
         self.kept_token_number = self.patch_number + self.class_token_num
         
-        self.update_kept_token_number()
+        self.update_kept_token_number(197)
     
     
-    def update_kept_token_number(self):
+    def update_kept_token_number(self, input_tok_count):
         self.selected_probability_softmax = self.selected_probability.softmax(dim=-1)
         # which will be used to calculate FLOPs, leveraging STE in Ceil to keep gradient backpropagation
         kept_token_number = ste_ceil(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax)) + self.class_token_num
-        self.kept_token_number = int(kept_token_number)
-        return kept_token_number
+        
+        self.merge_prob_sigmoid = torch.sigmoid(self.merge_prob)
+        merge_decision = ste_step(self.merge_prob_sigmoid)
+        # print(self.merge_prob)
+        # print(self.merge_prob_sigmoid)
+
+        if int(merge_decision) == 1:
+            # print("do merge")
+            self.kept_token_number = int(kept_token_number)
+            return kept_token_number
+        else:
+            # print("switch off merge")
+            self.kept_token_number = int(input_tok_count) #197
+            # kept_token_number.data = torch.ones_like(kept_token_number) #torch.tensor(float(input_tok_count)) #torch.tensor(197.0)
+            # kept_token_number.data.
+            return torch.tensor(input_tok_count, dtype=kept_token_number.dtype, device=kept_token_number.device) #torch.tensor(self.kept_token_number, dtype=kept_token_number.dtype, device=kept_token_number.device) #input_tok_count #kept_token_number
+        
         
     def get_token_probability(self):
         token_probability =  torch.zeros((self.patch_number+self.class_token_num), device=self.selected_probability_softmax.device) 

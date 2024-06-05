@@ -39,10 +39,25 @@ class STE_Ceil(torch.autograd.Function):
     def backward(ctx, g):
         return g, None
     
+
+class STE_Step(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x_in):
+        if x_in[0][0] >= 0.5:
+            x_in[0][0] = 1
+        else:
+            x_in[0][0] = 0
+        return x_in
     
+    @staticmethod
+    def backward(ctx, g):
+        return g, None
+    
+
 ste_ceil = STE_Ceil.apply
 ste_min = STE_Min.apply
 
+ste_step = STE_Step.apply
 
 def benchmark(
     model: torch.nn.Module,

@@ -62,6 +62,8 @@ class DiffRateBlock(Block):
         if self.training:
             # pruning, pruning only needs to generate masks during training
             last_token_number = mask[0].sum().int()
+            # print(mask.shape)
+            # print(last_token_number, type(last_token_number))
             # prune_kept_num = self.prune_ddp.update_kept_token_number()      # expected prune compression rate, has gradiet
             # self._diffrate_info["prune_kept_num"].append(prune_kept_num)
             # if prune_kept_num < last_token_number:        # make sure the kept token number is a decreasing sequence
@@ -72,9 +74,21 @@ class DiffRateBlock(Block):
 
 
             # DiffRate merging
-            mid_token_number = last_token_number
+            # if len(self._diffrate_info["merge_kept_num"]) == 0:
+            #     mid_token_number = torch.tensor(197, dtype=last_token_number.dtype, device=last_token_number.device)
+            # else:
+            #     # print(self._diffrate_info["merge_kept_num"][-1].item())
+            #     mid_token_number = torch.tensor(self._diffrate_info["merge_kept_num"][-1].item(), dtype=last_token_number.dtype, device=last_token_number.device)
+                
 
-            merge_kept_num = self.merge_ddp.update_kept_token_number()
+            mid_token_number = last_token_number
+            # print(self._diffrate_info["merge_kept_num"])
+            # if len(self._diffrate_info["merge_kept_num"]) > 0:
+            #     print(mid_token_number, self._diffrate_info["merge_kept_num"][-1])
+
+            # print(mid_token_number, type(mid_token_number))
+
+            merge_kept_num = self.merge_ddp.update_kept_token_number(mid_token_number)
             self._diffrate_info["merge_kept_num"].append(merge_kept_num)
 
             if merge_kept_num < mid_token_number:
@@ -207,7 +221,8 @@ def make_diffrate_class(transformer_class):
                     flops = self.calculate_flop_training()
                 else:
                     flops = self.calculate_flop_inference()
-                return x, flops
+                
+                return x, flops, self._diffrate_info["merge_kept_num"]
             else:
                 return x
         
@@ -320,7 +335,7 @@ def apply_patch(
     }
 
     block_index = 0
-    non_compressed_block_index = [0,1,2,4,5,7,8,10,11] #compress at 3,6,9 # [0]
+    non_compressed_block_index = [0] #[0,1,2,4,5,7,8,10,11] #compress at 3,6,9 # 
     for module in model.modules():
         if isinstance(module, Block):
             module.__class__ = DiffRateBlock
