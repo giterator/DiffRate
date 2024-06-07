@@ -19,12 +19,15 @@ import utils
 def train_one_epoch(model: torch.nn.Module, criterion,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0, mixup_fn: Optional[Mixup] = None,
-                    set_training_mode=True,logger=None,target_flops=3.0,warm_up=False):
+                    set_training_mode=True,logger=None,target_flops=3.0,warm_up=False, target_etrr=25.0):
     model.train(set_training_mode)
     # model.eval()
-    for name, param in model.named_parameters():
-        if not "selected_probability" in name:  # Check if the parameter is a weight
-            param.requires_grad = False
+    # for name, param in model.named_parameters():
+    #     print(name)
+    #     if (not "selected_probability" in name) or (not "merge_prob" in name):  # Check if the parameter is a weight
+    #         param.requires_grad = False
+    #     else:
+    #         param.requires_grad = True
             
     # model.train(False)      # finetune
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -49,7 +52,7 @@ def train_one_epoch(model: torch.nn.Module, criterion,
             samples, targets = mixup_fn(samples, targets)
 
         with torch.cuda.amp.autocast():
-            outputs, flops, sched = model(samples)
+            outputs, flops, sched, dec, etrr = model(samples)
             loss_cls = criterion(outputs, targets)
             loss_flops = ((flops/1e9)-target_flops)**2
             
@@ -65,48 +68,61 @@ def train_one_epoch(model: torch.nn.Module, criterion,
             #     if r > 0:
             #         merge_locs += 1
 
-            clean_sched = []
-            for k in sched:
-                clean_sched.append(int(k.item()))
+            # clean_sched = []
+            # for k in sched:
+            #     clean_sched.append(int(k.item()))
 
-            reduction_sched = []
-            inp_tok = 197
-            merge_locs = 0
-            for k in clean_sched:
-                r = inp_tok - k
-                if r > 0:
-                    merge_locs += 1
-                    inp_tok -= r
-                    reduction_sched.append(r)
-                else:
-                    reduction_sched.append(0)
+            # reduction_sched = []
+            # inp_tok = 197
+            # merge_locs = 0
+            # for k in clean_sched:
+            #     r = inp_tok - k
+            #     if r > 0:
+            #         merge_locs += 1
+            #         inp_tok -= r
+            #         reduction_sched.append(r)
+            #     else:
+            #         reduction_sched.append(0)
 
-            loss_tome = (merge_locs / 12.0) **2
+            # loss_tome = (merge_locs / 12.0) **2
 
-
-            def etrr(sched):
-                sum = 0
-                for i in range(len(sched)):
-                    layer = i+1
-                    sum += (sched[i] * (12-layer))
-                etrr = 100 * sum/(197*12)
-                return etrr
+            # loss_tome = (sum(model.get_dec()) / 12.0) **2
             
-            etrr_val = etrr(reduction_sched)
-            etrr_loss = ((etrr_val - 25.0) / 100.0) **2
+
+
+            # def etrr(sched):
+            #     sum = 0
+            #     for i in range(len(sched)):
+            #         layer = i+1
+            #         sum += (sched[i] * (12-layer))
+            #     etrr = 100 * sum/(197*12)
+            #     return etrr
+            
+            # etrr_val = etrr(reduction_sched)
+            etrr_loss = ((etrr - target_etrr)) **2
 
             # print(sched)
             # Loss terms MUST have grad func
             # print(type(sched))
 
             # loss = lamb * loss_flops + loss_cls
-            loss_tome = torch.tensor(loss_tome, dtype=sched[0].dtype, requires_grad=True)
+            # loss_tome = (sum(dec) / 12.0) **2
+            loss_tome = torch.log((sum(dec)+1) **2) # allows to play with few merging locations withuot increasing loss too much
             # print(loss_tome)
-            loss_etrr_per_merge = merge_locs / etrr_val
-            alpha = 10
-            beta = 1
-            gamma = 0.1
-            loss = gamma * loss_cls + alpha * loss_etrr_per_merge #+ beta * etrr_loss #/ lamb #+ etrr_loss * lamb
+            # loss_etrr_per_merge = merge_locs / etrr_val
+            alpha = 1 # 50 #0.1 #10
+            beta = 1 #10 #50 #10
+            gamma = 0.1 #1 #10 #0.1
+
+            if data_iter_step % 5 == 0:
+                loss =  gamma * loss_cls + alpha * loss_tome
+            else:
+                loss =  gamma * loss_cls + beta * etrr_loss #lamb * loss_flops #
+
+            # loss = lamb * loss_flops #beta * etrr_loss
+    
+            # loss =  beta * etrr_loss + alpha * loss_tome # + gamma * loss_cls 
+
             loss_cls_value = loss_cls.item()
             loss_flops_value = loss_flops.item()
 
@@ -131,16 +147,23 @@ def train_one_epoch(model: torch.nn.Module, criterion,
             if hasattr(model, 'module'):  # for DDP 
                 # prune_kept_num, merge_kept_num = model.module.get_kept_num()
                 merge_kept_num = model.module.get_kept_num()
+                merge_dec = model.module.get_dec()
+                merge_prob = model.module.get_merge_prob()
             else:
                 # prune_kept_num, merge_kept_num = model.get_kept_num()
                 merge_kept_num = model.get_kept_num()
+                merge_dec = model.get_dec()
+                merge_prob = model.get_merge_prob()
             # logger.info(f'prune kept number:{prune_kept_num}')
             logger.info(f'merge kept number:{merge_kept_num}')
+            logger.info(f'merge decision:{merge_dec}')
+            logger.info(f'merge prob:{merge_prob}')
 
 
         metric_logger.update(loss_cls=loss_cls_value)
-        metric_logger.update(loss_etrr_per_merge=loss_etrr_per_merge)
+        # metric_logger.update(loss_etrr_per_merge=loss_etrr_per_merge)
         metric_logger.update(loss_tome=loss_tome_value)
+        metric_logger.update(etrr=etrr)
         metric_logger.update(etrr_loss=etrr_loss)
         metric_logger.update(loss_flops=loss_flops_value)
         metric_logger.update(flops=flops/1e9)
@@ -168,7 +191,7 @@ def evaluate(data_loader, model, device,logger=None):
 
         # compute output
         with torch.cuda.amp.autocast():
-            output, flops, sched = model(images)
+            output, flops, sched, dec, etrr = model(images)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -182,11 +205,14 @@ def evaluate(data_loader, model, device,logger=None):
     if hasattr(model, 'module'):  # for DDP 
         # prune_kept_num, merge_kept_num = model.module.get_kept_num()
         merge_kept_num = model.module.get_kept_num()
+        merge_dec = model.module.get_dec()
     else:
         # prune_kept_num, merge_kept_num = model.get_kept_num()
         merge_kept_num = model.get_kept_num()
+        merge_dec = model.get_dec()
     # logger.info(f'prune kept number:{prune_kept_num}')
     logger.info(f'merge kept number:{merge_kept_num}')
+    logger.info(f'merge decision:{merge_dec}')
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
 

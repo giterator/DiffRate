@@ -5,7 +5,7 @@ Differentiable Discrte Proxy
 import torch.nn as nn
 import torch
 from DiffRate.utils import ste_ceil, ste_step
-
+import numpy as np
 
     
 
@@ -29,35 +29,49 @@ class DiffRate(nn.Module):
         self.selected_probability.requires_grad_(True)
 
         ## LSMS
-        self.merge_prob =  nn.Parameter(torch.randn(1,1))
+        self.merge_prob =  nn.Parameter(torch.tensor(0.5)) #0.5 torch.tensor(-0.5) torch.tensor(np.random.randn())
         self.merge_prob.requires_grad_(True)
+
+        self.merge_decision = ste_step(torch.sigmoid(self.merge_prob)) #1#
         
         # the learn target, which can be directly applied to the off-the-shlef pre-trained models
         self.kept_token_number = self.patch_number + self.class_token_num
         
-        self.update_kept_token_number(197)
+        self.update_kept_token_number()
     
     
-    def update_kept_token_number(self, input_tok_count):
+    def update_kept_token_number(self):
         self.selected_probability_softmax = self.selected_probability.softmax(dim=-1)
         # which will be used to calculate FLOPs, leveraging STE in Ceil to keep gradient backpropagation
-        kept_token_number = ste_ceil(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax)) + self.class_token_num
+        # kept_token_number = ste_ceil(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax)) + self.class_token_num
         
         self.merge_prob_sigmoid = torch.sigmoid(self.merge_prob)
         merge_decision = ste_step(self.merge_prob_sigmoid)
+
+        self.merge_decision = merge_decision
+
         # print(self.merge_prob)
         # print(self.merge_prob_sigmoid)
+        # print(merge_decision)
 
-        if int(merge_decision) == 1:
-            # print("do merge")
-            self.kept_token_number = int(kept_token_number)
-            return kept_token_number
-        else:
-            # print("switch off merge")
-            self.kept_token_number = int(input_tok_count) #197
-            # kept_token_number.data = torch.ones_like(kept_token_number) #torch.tensor(float(input_tok_count)) #torch.tensor(197.0)
-            # kept_token_number.data.
-            return torch.tensor(input_tok_count, dtype=kept_token_number.dtype, device=kept_token_number.device) #torch.tensor(self.kept_token_number, dtype=kept_token_number.dtype, device=kept_token_number.device) #input_tok_count #kept_token_number
+        kept_token_number = merge_decision * ste_ceil(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax)) + torch.tensor((1 - merge_decision) * 196.0 + self.class_token_num)
+        self.kept_token_number = int(kept_token_number)
+        return kept_token_number , merge_decision, self.merge_prob
+
+
+        # # print(self.merge_prob)
+        # # print(self.merge_prob_sigmoid)
+
+        # if int(merge_decision) == 1:
+        #     # print("do merge")
+        #     self.kept_token_number = int(kept_token_number)
+        #     return kept_token_number
+        # else:
+        #     # print("switch off merge")
+        #     self.kept_token_number = int(input_tok_count) #197
+        #     # kept_token_number.data = torch.ones_like(kept_token_number) #torch.tensor(float(input_tok_count)) #torch.tensor(197.0)
+        #     # kept_token_number.data.
+        #     return torch.tensor(input_tok_count, dtype=kept_token_number.dtype, device=kept_token_number.device) #torch.tensor(self.kept_token_number, dtype=kept_token_number.dtype, device=kept_token_number.device) #input_tok_count #kept_token_number
         
         
     def get_token_probability(self):

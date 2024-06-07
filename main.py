@@ -177,6 +177,7 @@ def get_args_parser():
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
 
     parser.add_argument('--target_flops', type=float, default=3.0)
+    parser.add_argument('--target_etrr', type=float, default=25.0)
     parser.add_argument('--granularity', type=int, default=4, help='the token number gap between each compression rate candidate')
     parser.add_argument('--load_compression_rate', action='store_true', help='eval by exiting compression rate in compression_rate.json')
     parser.add_argument('--warmup_compression_rate', action='store_true', default=False, help='inactive computational constraint in first epoch')
@@ -403,6 +404,7 @@ def main(args):
             set_training_mode=args.finetune == '',  # keep in eval mode during finetuning
             logger=logger, 
             target_flops=args.target_flops,
+            target_etrr=args.target_etrr,
             warm_up=args.warmup_compression_rate
         )
 

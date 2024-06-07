@@ -43,11 +43,13 @@ class STE_Ceil(torch.autograd.Function):
 class STE_Step(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x_in):
-        if x_in[0][0] >= 0.5:
-            x_in[0][0] = 1
-        else:
-            x_in[0][0] = 0
-        return x_in
+        # if x_in[0][0] >= 0.5:
+        #     x_in[0][0] = 1
+        # else:
+        #     x_in[0][0] = 0
+        # return x_in
+
+        return torch.round(x_in)
     
     @staticmethod
     def backward(ctx, g):

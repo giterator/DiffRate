@@ -88,10 +88,12 @@ class DiffRateBlock(Block):
 
             # print(mid_token_number, type(mid_token_number))
 
-            merge_kept_num = self.merge_ddp.update_kept_token_number(mid_token_number)
+            merge_kept_num, merge_dec, merge_prob = self.merge_ddp.update_kept_token_number()
             self._diffrate_info["merge_kept_num"].append(merge_kept_num)
+            self._diffrate_info["merge_decision"].append(merge_dec)
+            self._diffrate_info["merge_prob"].append(merge_prob)
 
-            if merge_kept_num < mid_token_number:
+            if merge_dec == 1 and merge_kept_num < mid_token_number:
                 merge_mask = self.merge_ddp.get_token_mask(mid_token_number) # Is this needed?
                 x_compressed, size_compressed = x[:, mid_token_number:], self._diffrate_info["size"][:,mid_token_number:]
 
@@ -124,7 +126,9 @@ class DiffRateBlock(Block):
             
             # DiffRate merging
             merge_kept_num = self.merge_ddp.kept_token_number
-            if merge_kept_num < N: #prune_kept_num:
+            merge_dec = self.merge_ddp.merge_decision
+
+            if merge_dec == 1 and merge_kept_num < N: #prune_kept_num:
                 # merge,node_max = get_merge_func(x.detach(), kept_number=merge_kept_num)
                 # x = merge(x,mode='mean')
                 # # optimize proportional attention in ToMe by considering similarity, this is benefit to the accuracy of off-the-shelf model.
@@ -213,16 +217,20 @@ def make_diffrate_class(transformer_class):
             self._diffrate_info["mask"] =  torch.ones((B,self.patch_embed.num_patches+1),device=x.device)
             # self._diffrate_info["prune_kept_num"] = []
             self._diffrate_info["merge_kept_num"] = []
+            self._diffrate_info["merge_decision"] = []
+            self._diffrate_info["merge_prob"] = []
             if self._diffrate_info["trace_source"]:
                 self._diffrate_info["source"] = torch.eye(self.patch_embed.num_patches+1, device=x.device)[None, ...].expand(B, self.patch_embed.num_patches+1, self.patch_embed.num_patches+1)
             x = super().forward(x)
             if return_flop:
                 if self.training:
                     flops = self.calculate_flop_training()
+                    etrr = self.calc_etrr()
                 else:
                     flops = self.calculate_flop_inference()
+                    etrr = self.calc_etrr()
                 
-                return x, flops, self._diffrate_info["merge_kept_num"]
+                return x, flops, self._diffrate_info["merge_kept_num"], self._diffrate_info["merge_decision"], etrr
             else:
                 return x
         
@@ -249,6 +257,42 @@ def make_diffrate_class(transformer_class):
                 # prune_kept_num.append(int(block.prune_ddp.kept_token_number))
                 merge_kept_num.append(int(block.merge_ddp.kept_token_number))
             return merge_kept_num #prune_kept_num, merge_kept_num
+        
+        def get_dec(self):
+            dec = []
+            for block in self.blocks:
+                # prune_kept_num.append(int(block.prune_ddp.kept_token_number))
+                dec.append(int(block.merge_ddp.merge_decision))
+            return dec #prune_kept_num, merge_kept_num
+        
+        def get_merge_prob(self):
+            merge_prob = []
+            for block in self.blocks:
+                # prune_kept_num.append(int(block.prune_ddp.kept_token_number))
+                merge_prob.append(float(block.merge_ddp.merge_prob))
+            return merge_prob #prune_kept_num, merge_kept_num
+        
+        def calc_etrr(self):
+            mono_sched = []
+            rem_tok = 197.0
+            layer = 11
+            for merge_kept_number, merge_dec in zip(self._diffrate_info["merge_kept_num"], self._diffrate_info["merge_decision"]):
+                r = torch.nn.functional.relu((rem_tok - merge_kept_number)) 
+                effective_r = r * merge_dec * layer
+                mono_sched.append(effective_r)
+                layer -=1
+                rem_tok -= r
+
+                # if merge_kept_number <= rem_tok and merge_dec == 1:
+                #     mono_sched.append((rem_tok - merge_kept_number) * layer)
+                #     rem_tok = merge_kept_number
+                # else:
+                #     mono_sched.append(0)
+                # layer -= 1
+
+            return (100 * sum(mono_sched) / (197*12))            
+
+
                 
 
         # def set_kept_num(self, prune_kept_numbers, merge_kept_numbers):
