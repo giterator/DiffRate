@@ -5,4 +5,3 @@ python3 main.py \
 --output_dir /home/pranav/DiffRate/learnt/LSMS \
 --model vit_deit_small_patch16_224 \
 --target_etrr 25.38
---target_flops 2.3

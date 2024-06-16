@@ -178,7 +178,7 @@ def get_args_parser():
 
     parser.add_argument('--target_flops', type=float, default=3.0)
     parser.add_argument('--target_etrr', type=float, default=25.0)
-    parser.add_argument('--granularity', type=int, default=4, help='the token number gap between each compression rate candidate')
+    parser.add_argument('--granularity', type=int, default=1, help='the token number gap between each compression rate candidate')
     parser.add_argument('--load_compression_rate', action='store_true', help='eval by exiting compression rate in compression_rate.json')
     parser.add_argument('--warmup_compression_rate', action='store_true', default=False, help='inactive computational constraint in first epoch')
     return parser

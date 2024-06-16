@@ -274,10 +274,10 @@ def make_diffrate_class(transformer_class):
         
         def calc_etrr(self):
             mono_sched = []
-            rem_tok = 197.0
+            rem_tok = torch.tensor(197.0, device = torch.device('cuda:0'))
             layer = 11
             for merge_kept_number, merge_dec in zip(self._diffrate_info["merge_kept_num"], self._diffrate_info["merge_decision"]):
-                r = torch.nn.functional.relu((rem_tok - merge_kept_number)) 
+                r = min(torch.nn.functional.relu((rem_tok - merge_kept_number)), torch.tensor(rem_tok//2, device = torch.device('cuda:0')))
                 effective_r = r * merge_dec * layer
                 mono_sched.append(effective_r)
                 layer -=1

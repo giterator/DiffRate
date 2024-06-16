@@ -23,10 +23,18 @@ class DiffRate(nn.Module):
         
         # for more clean code, we directly set the candidate as kept token number, which can perform same as compression rate
         # at least one token should be kept
-        self.kept_token_candidate =  nn.Parameter(torch.arange(patch_number, 0,-1*granularity).float())
+        self.kept_token_candidate = nn.Parameter(torch.arange(patch_number, 0,-1*granularity).float()) #nn.Parameter(torch.arange(patch_number, 0,-1*granularity).float())
         self.kept_token_candidate.requires_grad_(False)
-        self.selected_probability =  nn.Parameter(torch.zeros_like(self.kept_token_candidate))   
+        # temp = torch.zeros_like(self.kept_token_candidate)
+        # temp[-1] = 1.0
+        # print(temp.shape)
+        # print(patch_number)
+        # print(granularity)
+        self.selected_probability = nn.Parameter(torch.randn_like(self.kept_token_candidate))   #nn.Parameter(torch.zeros_like(self.kept_token_candidate))   
         self.selected_probability.requires_grad_(True)
+        # self.selected_probability_softmax = self.selected_probability.softmax(dim=-1)
+
+        # print(torch.argwhere(self.selected_probability_softmax))
 
         ## LSMS
         self.merge_prob =  nn.Parameter(torch.tensor(0.5)) #0.5 torch.tensor(-0.5) torch.tensor(np.random.randn())

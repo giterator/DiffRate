@@ -6,6 +6,8 @@ from typing import Callable, Tuple
 import torch
 import torch.nn as nn
 
+from DiffRate.utils import ste_min
+
 def do_nothing(x, mode=None):
     return x
 
@@ -32,7 +34,7 @@ def bipartite_soft_matching(
 
     # We can only reduce by a maximum of 50% tokens
     t = metric.shape[1]
-    r = min(r, (t - protected) // 2)
+    r = ste_min(r, (t - protected) // 2)
 
     if r <= 0:
         return do_nothing, do_nothing

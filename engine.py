@@ -101,23 +101,40 @@ def train_one_epoch(model: torch.nn.Module, criterion,
             # etrr_val = etrr(reduction_sched)
             etrr_loss = ((etrr - target_etrr)) **2
 
+            l = 1
+            t = l * 5.44/100
+            lat = 0
+
+
+            lat += (197/197) * (l + model._diffrate_info["merge_decision"][0]*t)
+
+            for i in range(1, len(model._diffrate_info["merge_kept_num"])):
+                lat += (model._diffrate_info["merge_kept_num"][i-1]/197) * (l + model._diffrate_info["merge_decision"][i]*t)
+
+            # for i in range(len(model._diffrate_info["merge_kept_num"])):
+            #     lat += (model._diffrate_info["merge_kept_num"][i]/197) * (l +  model._diffrate_info["merge_decision"][i]*t)
+
+            loss_lat = lat ** 2
+            
             # print(sched)
             # Loss terms MUST have grad func
             # print(type(sched))
 
             # loss = lamb * loss_flops + loss_cls
             # loss_tome = (sum(dec) / 12.0) **2
-            loss_tome = torch.log((sum(dec)+1) **2) # allows to play with few merging locations withuot increasing loss too much
+            loss_tome = sum(dec) ** 2 #torch.log((sum(dec)+1) **2) # allows to play with few merging locations withuot increasing loss too much
             # print(loss_tome)
             # loss_etrr_per_merge = merge_locs / etrr_val
-            alpha = 1 # 50 #0.1 #10
-            beta = 1 #10 #50 #10
-            gamma = 0.1 #1 #10 #0.1
+            alpha = 50 # 50 #0.1 #10
+            beta = 100 #10 #50 #10
+            gamma = 10 #100 #1 #10 #0.1
 
-            if data_iter_step % 5 == 0:
-                loss =  gamma * loss_cls + alpha * loss_tome
-            else:
-                loss =  gamma * loss_cls + beta * etrr_loss #lamb * loss_flops #
+            # loss = loss_lat
+            loss =  gamma * loss_cls + beta * etrr_loss + alpha * loss_tome
+            # if data_iter_step % 4 == 0:
+            #     loss =  gamma * loss_cls + alpha * loss_tome
+            # else:
+            #     loss =  gamma * loss_cls + beta * etrr_loss #lamb * loss_flops #
 
             # loss = lamb * loss_flops #beta * etrr_loss
     
@@ -163,6 +180,7 @@ def train_one_epoch(model: torch.nn.Module, criterion,
         metric_logger.update(loss_cls=loss_cls_value)
         # metric_logger.update(loss_etrr_per_merge=loss_etrr_per_merge)
         metric_logger.update(loss_tome=loss_tome_value)
+        metric_logger.update(loss_lat=loss_lat)
         metric_logger.update(etrr=etrr)
         metric_logger.update(etrr_loss=etrr_loss)
         metric_logger.update(loss_flops=loss_flops_value)
