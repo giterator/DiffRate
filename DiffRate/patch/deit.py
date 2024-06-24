@@ -88,8 +88,9 @@ class DiffRateBlock(Block):
 
             # print(mid_token_number, type(mid_token_number))
 
-            merge_kept_num, merge_dec, merge_prob = self.merge_ddp.update_kept_token_number()
+            merge_kept_num, merge_dec, merge_prob, merge_kept_num_prob = self.merge_ddp.update_kept_token_number()
             self._diffrate_info["merge_kept_num"].append(merge_kept_num)
+            self._diffrate_info["merge_kept_num_prob"].append(merge_kept_num_prob)
             self._diffrate_info["merge_decision"].append(merge_dec)
             self._diffrate_info["merge_prob"].append(merge_prob)
 
@@ -217,6 +218,7 @@ def make_diffrate_class(transformer_class):
             self._diffrate_info["mask"] =  torch.ones((B,self.patch_embed.num_patches+1),device=x.device)
             # self._diffrate_info["prune_kept_num"] = []
             self._diffrate_info["merge_kept_num"] = []
+            self._diffrate_info["merge_kept_num_prob"] = []
             self._diffrate_info["merge_decision"] = []
             self._diffrate_info["merge_prob"] = []
             if self._diffrate_info["trace_source"]:
@@ -230,7 +232,7 @@ def make_diffrate_class(transformer_class):
                     flops = self.calculate_flop_inference()
                     etrr = self.calc_etrr()
                 
-                return x, flops, self._diffrate_info["merge_kept_num"], self._diffrate_info["merge_decision"], etrr
+                return x, flops, self._diffrate_info["merge_kept_num"], self._diffrate_info["merge_decision"], etrr, self._diffrate_info["merge_kept_num_prob"]
             else:
                 return x
         
@@ -277,7 +279,7 @@ def make_diffrate_class(transformer_class):
             rem_tok = torch.tensor(197.0, device = torch.device('cuda:0'))
             layer = 11
             for merge_kept_number, merge_dec in zip(self._diffrate_info["merge_kept_num"], self._diffrate_info["merge_decision"]):
-                r = min(torch.nn.functional.relu((rem_tok - merge_kept_number)), torch.tensor(rem_tok//2, device = torch.device('cuda:0')))
+                r = ste_min(torch.nn.functional.relu((rem_tok - merge_kept_number)), torch.tensor(rem_tok//2, device = torch.device('cuda:0')))
                 effective_r = r * merge_dec * layer
                 mono_sched.append(effective_r)
                 layer -=1
@@ -379,7 +381,7 @@ def apply_patch(
     }
 
     block_index = 0
-    non_compressed_block_index = [0] #[0,1,2,4,5,7,8,10,11] #compress at 3,6,9 # 
+    non_compressed_block_index = [] #[0] #[0,1,2,4,5,7,8,10,11] #compress at 3,6,9 # 
     for module in model.modules():
         if isinstance(module, Block):
             module.__class__ = DiffRateBlock

@@ -23,14 +23,14 @@ class DiffRate(nn.Module):
         
         # for more clean code, we directly set the candidate as kept token number, which can perform same as compression rate
         # at least one token should be kept
-        self.kept_token_candidate = nn.Parameter(torch.arange(patch_number, 0,-1*granularity).float()) #nn.Parameter(torch.arange(patch_number, 0,-1*granularity).float())
+        self.kept_token_candidate = nn.Parameter(torch.arange(patch_number, -1,-1*granularity).float()) #nn.Parameter(torch.arange(patch_number, 0,-1*granularity).float())
         self.kept_token_candidate.requires_grad_(False)
         # temp = torch.zeros_like(self.kept_token_candidate)
         # temp[-1] = 1.0
         # print(temp.shape)
         # print(patch_number)
         # print(granularity)
-        self.selected_probability = nn.Parameter(torch.randn_like(self.kept_token_candidate))   #nn.Parameter(torch.zeros_like(self.kept_token_candidate))   
+        self.selected_probability = nn.Parameter(torch.zeros_like(self.kept_token_candidate)) #nn.Parameter(temp) #nn.Parameter(torch.randn_like(self.kept_token_candidate))
         self.selected_probability.requires_grad_(True)
         # self.selected_probability_softmax = self.selected_probability.softmax(dim=-1)
 
@@ -62,9 +62,13 @@ class DiffRate(nn.Module):
         # print(self.merge_prob_sigmoid)
         # print(merge_decision)
 
-        kept_token_number = merge_decision * ste_ceil(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax)) + torch.tensor((1 - merge_decision) * 196.0 + self.class_token_num)
+        kept_token_number = merge_decision * ste_ceil(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax)) + torch.tensor((1 - merge_decision) * 196.0) + self.class_token_num
         self.kept_token_number = int(kept_token_number)
-        return kept_token_number , merge_decision, self.merge_prob
+
+        # print(self.selected_probability_softmax.shape)
+        # print(self.kept_token_candidate.shape)
+        # print(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax).shape)
+        return kept_token_number , merge_decision, self.merge_prob, self.selected_probability_softmax
 
 
         # # print(self.merge_prob)

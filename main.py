@@ -31,6 +31,8 @@ import models_mae
 import caformer
 import DiffRate
 
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter()
 
 warnings.filterwarnings('ignore')
 
@@ -178,6 +180,8 @@ def get_args_parser():
 
     parser.add_argument('--target_flops', type=float, default=3.0)
     parser.add_argument('--target_etrr', type=float, default=25.0)
+    parser.add_argument('--target_thru', type=float, default=75.0)
+    parser.add_argument('--target_batch_size', type=int, default=8)
     parser.add_argument('--granularity', type=int, default=1, help='the token number gap between each compression rate candidate')
     parser.add_argument('--load_compression_rate', action='store_true', help='eval by exiting compression rate in compression_rate.json')
     parser.add_argument('--warmup_compression_rate', action='store_true', default=False, help='inactive computational constraint in first epoch')
@@ -398,14 +402,16 @@ def main(args):
             data_loader_train.sampler.set_epoch(epoch)
 
         train_stats = train_one_epoch(
-            model, criterion, data_loader_train,
+            writer, model, criterion, data_loader_train,
             optimizer,device, epoch, loss_scaler,
             args.clip_grad, mixup_fn,
             set_training_mode=args.finetune == '',  # keep in eval mode during finetuning
             logger=logger, 
             target_flops=args.target_flops,
             target_etrr=args.target_etrr,
-            warm_up=args.warmup_compression_rate
+            target_thru=args.target_thru,
+            target_batch_size=args.target_batch_size,
+            warm_up=args.warmup_compression_rate,
         )
 
         lr_scheduler.step(epoch)
@@ -448,3 +454,6 @@ if __name__ == '__main__':
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)
+
+    writer.flush()
+    writer.close()

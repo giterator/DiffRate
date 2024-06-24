@@ -14,12 +14,30 @@ from timm.utils import accuracy, ModelEma
 
 import utils
 
+from DiffRate.utils import ste_min
+
+import numpy as np
 
 
-def train_one_epoch(model: torch.nn.Module, criterion,
+def rep_double(tensor):
+    for i in range(tensor.shape[0]):
+        for j in range(tensor.shape[1]):
+            if torch.isinf(tensor[i][j]):
+                tensor[i][j] = tensor[i][j-1]
+    return tensor
+
+
+lat_lut = torch.tensor(np.load("layer_lat.npy"), device = torch.device('cuda:0'))
+inf_tensor = torch.full((197,197), float("inf"), dtype=lat_lut.dtype)
+original_slice = (slice(0, lat_lut.shape[0]), slice(0, lat_lut.shape[1]))
+inf_tensor[original_slice] = lat_lut
+inf_tensor = rep_double(inf_tensor.clone())
+lat_lut = torch.tensor(inf_tensor, device = torch.device('cuda:0'), dtype=torch.half)
+
+def train_one_epoch(writer, model: torch.nn.Module, criterion,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0, mixup_fn: Optional[Mixup] = None,
-                    set_training_mode=True,logger=None,target_flops=3.0,warm_up=False, target_etrr=25.0):
+                    set_training_mode=True,logger=None,target_flops=3.0,warm_up=False, target_etrr=25.0, target_thru=75.0, target_batch_size=8):
     model.train(set_training_mode)
     # model.eval()
     # for name, param in model.named_parameters():
@@ -52,7 +70,7 @@ def train_one_epoch(model: torch.nn.Module, criterion,
             samples, targets = mixup_fn(samples, targets)
 
         with torch.cuda.amp.autocast():
-            outputs, flops, sched, dec, etrr = model(samples)
+            outputs, flops, sched, dec, etrr, merge_kept_num_prob = model(samples)
             loss_cls = criterion(outputs, targets)
             loss_flops = ((flops/1e9)-target_flops)**2
             
@@ -101,20 +119,72 @@ def train_one_epoch(model: torch.nn.Module, criterion,
             # etrr_val = etrr(reduction_sched)
             etrr_loss = ((etrr - target_etrr)) **2
 
-            l = 1
-            t = l * 5.44/100
-            lat = 0
+            
+            # print(lat_lut.shape)
+            # print(lat_lut[-1])
+
+            inp_tok_prob = torch.zeros(197, device = torch.device('cuda:0'), dtype=torch.half)
+            inp_tok_prob[-1] = 1.0
+            lat = torch.matmul(torch.matmul(torch.flip(inp_tok_prob, dims=()), lat_lut), merge_kept_num_prob[0])
+            # print(lat)
+            # print(inp_tok_prob.shape)
+            # print(lat_lut[-1])
+            # print(torch.flip(inp_tok_prob, dims=()).shape)
+            # print(torch.matmul(torch.flip(inp_tok_prob, dims=()), lat_lut))
+            # print(torch.matmul(torch.flip(inp_tok_prob, dims=()).unsqueeze(0), lat_lut))
+            # print(lat_lut[:][24])
+            # print(torch.matmul(torch.flip(inp_tok_prob, dims=()) , lat_lut[:][24]))
+            # print(torch.matmul(torch.flip(inp_tok_prob, dims=()) , lat_lut[:][26]))
+            rem_tok = torch.tensor(197.0, device = torch.device('cuda:0'))
+            for i in range(1, len(merge_kept_num_prob)):
+                r = ste_min(torch.nn.functional.relu((rem_tok - model._diffrate_info["merge_kept_num"][i])), torch.tensor(rem_tok//2, device = torch.device('cuda:0')))
+                inp_tok_mask = torch.zeros_like(merge_kept_num_prob[0])
+                inp_tok_mask[int(rem_tok-1)] = 1.0
+                r_mask = torch.zeros_like(merge_kept_num_prob[0])
+                r_mask[int(r)] = 1.0
+
+                lat += torch.matmul(torch.matmul(inp_tok_mask, lat_lut), r_mask)
+
+                rem_tok -= r
+
+                # lat += torch.matmul(torch.matmul(torch.flip(merge_kept_num_prob[i-1], dims=()), lat_lut), merge_kept_num_prob[i])
 
 
-            lat += (197/197) * (l + model._diffrate_info["merge_decision"][0]*t)
+                
+                # print(torch.matmul(torch.matmul(torch.flip(merge_kept_num_prob[i-1], dims=()), lat_lut), torch.flip(merge_kept_num_prob[i], dims=())))
+            # print(lat)
 
-            for i in range(1, len(model._diffrate_info["merge_kept_num"])):
-                lat += (model._diffrate_info["merge_kept_num"][i-1]/197) * (l + model._diffrate_info["merge_decision"][i]*t)
+            # lat = 0
+            # inp_tok = 197
+            # for kept in model._diffrate_info["merge_kept_num"]:
+            #     r = ste_min(torch.nn.functional.relu((inp_tok - kept)), torch.tensor(inp_tok//2, device = torch.device('cuda:0')))
+            #     tok_count_mask = torch.zeros((1,197), dtype=lat_lut.dtype, device = torch.device('cuda:0'))
+            #     tok_count_mask[0][int(inp_tok-1)] = 1.0
+            #     r_mask = torch.zeros((99,1), dtype=lat_lut.dtype, device = torch.device('cuda:0'))
+            #     r_mask[int(r)][0] = 1.0
 
-            # for i in range(len(model._diffrate_info["merge_kept_num"])):
-            #     lat += (model._diffrate_info["merge_kept_num"][i]/197) * (l +  model._diffrate_info["merge_decision"][i]*t)
+            #     lat += torch.matmul(torch.matmul(tok_count_mask, lat_lut), r_mask)
+            #     # lat += lat_lut[int(inp_tok-1)][int(r)]
+            #     inp_tok -= r
 
-            loss_lat = lat ** 2
+            thru = target_batch_size / lat
+
+            thru_loss = (thru - target_thru) **2
+
+            # l = 1
+            # t = l * 5.44/100
+            # lat = 0
+
+
+            # lat += (197/197) * (l + model._diffrate_info["merge_decision"][0]*t)
+
+            # for i in range(1, len(model._diffrate_info["merge_kept_num"])):
+            #     lat += (model._diffrate_info["merge_kept_num"][i-1]/197) * (l + model._diffrate_info["merge_decision"][i]*t)
+
+            # # for i in range(len(model._diffrate_info["merge_kept_num"])):
+            # #     lat += (model._diffrate_info["merge_kept_num"][i]/197) * (l +  model._diffrate_info["merge_decision"][i]*t)
+
+            # loss_lat = lat ** 2
             
             # print(sched)
             # Loss terms MUST have grad func
@@ -130,7 +200,7 @@ def train_one_epoch(model: torch.nn.Module, criterion,
             gamma = 10 #100 #1 #10 #0.1
 
             # loss = loss_lat
-            loss =  gamma * loss_cls + beta * etrr_loss + alpha * loss_tome
+            loss = thru_loss + loss_cls #10 * loss_cls + etrr_loss #gamma * loss_cls + beta * etrr_loss + alpha * loss_tome
             # if data_iter_step % 4 == 0:
             #     loss =  gamma * loss_cls + alpha * loss_tome
             # else:
@@ -146,7 +216,24 @@ def train_one_epoch(model: torch.nn.Module, criterion,
             loss_tome_value = loss_tome
             
             
+        writer.add_scalar("loss", loss, (epoch+1) * data_iter_step)
+        writer.add_scalar("thru_loss", thru_loss, (epoch+1) * data_iter_step)
+        writer.add_scalar("etrr_loss", etrr_loss, (epoch+1) * data_iter_step)
+        writer.add_scalar("loss_cls", loss_cls, (epoch+1) * data_iter_step)
+        writer.add_scalar("loss_tome", loss_tome, (epoch+1) * data_iter_step)
+        writer.add_scalar("loss_flops", loss_flops_value, (epoch+1) * data_iter_step)
+
+        merge_dec = model.get_dec()
+        merge_prob = model.get_merge_prob()
+
+        i = 1
+        for dec, prob in zip(merge_dec, merge_prob):
+            writer.add_scalar(f"merge_dec_{i}", dec, (epoch+1) * data_iter_step)
+            writer.add_scalar(f"merge_prob_{i}", prob, (epoch+1) * data_iter_step)
+            i+=1
         
+
+
         
         if not math.isfinite(loss_cls_value):
             logger.info("Loss is {}, stopping training".format(loss_cls_value))
@@ -158,6 +245,8 @@ def train_one_epoch(model: torch.nn.Module, criterion,
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
         grad_norm = loss_scaler(loss, optimizer, clip_grad=max_norm,
                     parameters=model.arch_parameters(), create_graph=is_second_order)
+        
+        writer.add_scalar("grad_norm", grad_norm, (epoch+1) * data_iter_step)
         torch.cuda.synchronize()
 
         if data_iter_step%compression_rate_print_freq == 0:
@@ -180,7 +269,9 @@ def train_one_epoch(model: torch.nn.Module, criterion,
         metric_logger.update(loss_cls=loss_cls_value)
         # metric_logger.update(loss_etrr_per_merge=loss_etrr_per_merge)
         metric_logger.update(loss_tome=loss_tome_value)
-        metric_logger.update(loss_lat=loss_lat)
+        # metric_logger.update(loss_lat=loss_lat)
+        metric_logger.update(thru=thru)
+        metric_logger.update(thru_loss=thru_loss)
         metric_logger.update(etrr=etrr)
         metric_logger.update(etrr_loss=etrr_loss)
         metric_logger.update(loss_flops=loss_flops_value)
@@ -209,7 +300,7 @@ def evaluate(data_loader, model, device,logger=None):
 
         # compute output
         with torch.cuda.amp.autocast():
-            output, flops, sched, dec, etrr = model(images)
+            output, flops, sched, dec, etrr, merge_kept_num_prob = model(images)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
