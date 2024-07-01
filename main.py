@@ -31,6 +31,8 @@ import models_mae
 import caformer
 import DiffRate
 
+import math 
+
 from torch.utils.tensorboard import SummaryWriter
 writer = SummaryWriter()
 
@@ -199,7 +201,7 @@ def main(args):
     device = torch.device(args.device)
 
     # fix the seed for reproducibility
-    seed = args.seed + utils.get_rank()
+    seed = args.seed #+ utils.get_rank()
     torch.manual_seed(seed)
     np.random.seed(seed)
     # random.seed(seed)
@@ -394,6 +396,7 @@ def main(args):
                 loss_scaler.load_state_dict(checkpoint['scaler'])
 
 
+    # prev_loss = math.inf
     logger.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     max_accuracy = 0.0
@@ -442,6 +445,12 @@ def main(args):
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
+
+
+        # curr_loss = train_stats["loss"]
+        # if abs(curr_loss - prev_loss) < 0.1:
+        #     break
+        # prev_loss = curr_loss
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
