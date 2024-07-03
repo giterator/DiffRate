@@ -20,7 +20,7 @@ import logging
 from termcolor import colored
 import sys
 
-from torch._six import inf
+from torch import inf
 import numpy as np
 import math
 import multiprocessing

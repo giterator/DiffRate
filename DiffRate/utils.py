@@ -9,15 +9,26 @@ import math
 import torch
 from tqdm import tqdm
 
+# class STE_Min(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, x_in1, x_in2, x_in3=math.inf):
+#         x = min(x_in1, x_in2, x_in3)
+#         return x
+    
+#     @staticmethod
+#     def backward(ctx, g):
+#         return None, g, g
+
 class STE_Min(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x_in1, x_in2, x_in3=math.inf):
-        x = min(x_in1, x_in2, x_in3)
+    def forward(ctx, x_in1, x_in3=math.inf):
+        x = min(x_in1, x_in3)
         return x
     
     @staticmethod
     def backward(ctx, g):
-        return None, g, g
+        return None, g
+
     
 class STE_Ceil(torch.autograd.Function):
     @staticmethod
