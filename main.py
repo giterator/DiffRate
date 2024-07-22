@@ -33,6 +33,42 @@ import DiffRate
 
 import math 
 
+import torch.nn as nn
+
+class ThroughputProxy(nn.Module):
+    def __init__(self, a, b, c):
+        super(ThroughputProxy, self).__init__()
+        self.a = nn.Parameter(torch.tensor(a, dtype=torch.float32), requires_grad=False)
+        self.b = nn.Parameter(torch.tensor(b, dtype=torch.float32), requires_grad=False)
+        self.c = nn.Parameter(torch.tensor(c, dtype=torch.float32), requires_grad=False)
+
+    def forward(self, etr):
+        return self.a * etr**2 + self.b * etr + self.c
+
+class DifferentiableMergingLoss(nn.Module):
+    def __init__(self, throughput_proxy, criterion, accuracy_weight=1.0, throughput_weight=1.0):
+        super(DifferentiableMergingLoss, self).__init__()
+        self.throughput_proxy = throughput_proxy
+        self.accuracy_weight = accuracy_weight
+        self.throughput_weight = throughput_weight
+        self.criterion = criterion
+
+    def forward(self, predictions, targets, etr, target_thru):
+        # Compute accuracy loss
+        loss_cls = self.criterion(predictions, targets)
+
+        # Compute (negative) throughput loss
+        # We use negative because we want to maximize throughput
+        throughput_loss = -self.throughput_proxy(etr) #(target_thru-self.throughput_proxy(etr))
+
+        # Combine losses
+        total_loss = self.accuracy_weight * loss_cls + self.throughput_weight * throughput_loss
+
+        return total_loss, loss_cls, throughput_loss
+    
+    
+    
+
 from torch.utils.tensorboard import SummaryWriter
 writer = SummaryWriter()
 
@@ -278,7 +314,7 @@ def main(args):
         # DiffRate.patch.deit(model, prune_granularity=args.granularity, merge_granularity=args.granularity)
         DiffRate.patch.deit(model, merge_granularity=args.granularity)
     elif 'mae' in args.model:
-        DiffRate.patch.mae(model, prune_granularity=args.granularity, merge_granularity=args.granularity)
+        DiffRate.patch.mae(model, merge_granularity=args.granularity)
     elif 'caformer' in args.model:
         DiffRate.patch.caformer(model, prune_granularity=args.granularity, merge_granularity=args.granularity)
     else:
@@ -396,6 +432,12 @@ def main(args):
                 loss_scaler.load_state_dict(checkpoint['scaler'])
 
 
+    # Initialize the throughput proxy with the learned quadratic coefficients
+    a, b, c = 0.011698369441096304, 0.4723945366031816, 5.02 #56.65657604221558  # Replace with your actual coefficients
+    throughput_proxy = ThroughputProxy(a, b, c).to(device)
+    # Create the loss function
+    loss_fn = DifferentiableMergingLoss(throughput_proxy, criterion, accuracy_weight=1.0, throughput_weight=0.1).to(device)
+
     # prev_loss = math.inf
     logger.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
@@ -405,6 +447,7 @@ def main(args):
             data_loader_train.sampler.set_epoch(epoch)
 
         train_stats = train_one_epoch(
+            loss_fn,
             writer, model, criterion, data_loader_train,
             optimizer,device, epoch, loss_scaler,
             args.clip_grad, mixup_fn,
