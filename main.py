@@ -36,14 +36,14 @@ import math
 import torch.nn as nn
 
 class ThroughputProxy(nn.Module):
-    def __init__(self, a, b, c):
+    def __init__(self, m, v):
         super(ThroughputProxy, self).__init__()
-        self.a = nn.Parameter(torch.tensor(a, dtype=torch.float32), requires_grad=False)
-        self.b = nn.Parameter(torch.tensor(b, dtype=torch.float32), requires_grad=False)
-        self.c = nn.Parameter(torch.tensor(c, dtype=torch.float32), requires_grad=False)
+        self.m = nn.Parameter(torch.tensor(m, dtype=torch.float32), requires_grad=False)
+        self.v = nn.Parameter(torch.tensor(v, dtype=torch.float32), requires_grad=False)
+        # self.c = nn.Parameter(torch.tensor(c, dtype=torch.float32), requires_grad=False)
 
     def forward(self, etr):
-        return self.a * etr**2 + self.b * etr + self.c
+        return torch.exp(torch.log(self.v) + self.m * etr * 16/6 *12/24) #self.a * etr**2 + self.b * etr + self.c
 
 class DifferentiableMergingLoss(nn.Module):
     def __init__(self, throughput_proxy, criterion, accuracy_weight=1.0, throughput_weight=1.0):
@@ -433,8 +433,8 @@ def main(args):
 
 
     # Initialize the throughput proxy with the learned quadratic coefficients
-    a, b, c = 0.011698369441096304, 0.4723945366031816, 5.02 #56.65657604221558  # Replace with your actual coefficients
-    throughput_proxy = ThroughputProxy(a, b, c).to(device)
+    m, v = 0.014234242865188342, 5.02 #0.011698369441096304, 0.4723945366031816, 5.02 #56.65657604221558  # Replace with your actual coefficients
+    throughput_proxy = ThroughputProxy(m, v).to(device)
     # Create the loss function
     loss_fn = DifferentiableMergingLoss(throughput_proxy, criterion, accuracy_weight=1.0, throughput_weight=0.1).to(device)
 
