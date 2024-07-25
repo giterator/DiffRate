@@ -7,14 +7,15 @@ from sklearn.metrics import mean_squared_error, r2_score
 import matplotlib.pyplot as plt
 
 # Load the data
-data = pd.read_csv("etrr_thru.csv") #pd.read_csv("jetson_vit_large_patch16_mae_batch8_gran_4_etrr_thru.csv") #  # Replace with your actual CSV file name
-vanilla_thru = 0 #5.02 #56
+data = pd.read_csv("jetson_deitS_batch8_etrr_thru.csv") #pd.read_csv("deitS_Rpi_batch1_etrr_thru_gran_1.csv") #pd.read_csv("jetson_vit_large_patch16_mae_batch8_gran_4_etrr_thru.csv") #  # Replace with your actual CSV file name
+vanilla_thru = 56 #5.02 #56
 data.columns = ["ETR", "Throughput"]
 
 # Assuming your CSV has columns 'ETR' and 'Throughput'
 X = data['ETR'].values.reshape(-1, 1)
 y = data['Throughput'].values
-y = np.log(y - vanilla_thru)
+
+y = np.log(y)
 
 # Split the data into training and testing sets
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)

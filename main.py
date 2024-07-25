@@ -35,6 +35,37 @@ import math
 
 import torch.nn as nn
 
+# class ThroughputProxy(nn.Module):
+#     def __init__(self, a, b, c):
+#         super(ThroughputProxy, self).__init__()
+#         self.a = nn.Parameter(torch.tensor(a, dtype=torch.float32), requires_grad=False)
+#         self.b = nn.Parameter(torch.tensor(b, dtype=torch.float32), requires_grad=False)
+#         self.c = nn.Parameter(torch.tensor(c, dtype=torch.float32), requires_grad=False)
+
+#     def forward(self, etr):
+#         return self.a * etr**2 + self.b * etr + self.c
+
+# class DifferentiableMergingLoss(nn.Module):
+#     def __init__(self, throughput_proxy, criterion, accuracy_weight=1.0, throughput_weight=1.0):
+#         super(DifferentiableMergingLoss, self).__init__()
+#         self.throughput_proxy = throughput_proxy
+#         self.accuracy_weight = accuracy_weight
+#         self.throughput_weight = throughput_weight
+#         self.criterion = criterion
+
+#     def forward(self, predictions, targets, etr, target_thru):
+#         # Compute accuracy loss
+#         loss_cls = self.criterion(predictions, targets)
+
+#         # Compute (negative) throughput loss
+#         # We use negative because we want to maximize throughput
+#         throughput_loss = (target_thru-self.throughput_proxy(etr)) ** 2
+
+#         # Combine losses
+#         total_loss = self.throughput_weight * throughput_loss #self.accuracy_weight * loss_cls + self.throughput_weight * throughput_loss
+
+#         return total_loss, loss_cls, throughput_loss
+    
 class ThroughputProxy(nn.Module):
     def __init__(self, m, v):
         super(ThroughputProxy, self).__init__()
@@ -43,26 +74,27 @@ class ThroughputProxy(nn.Module):
         # self.c = nn.Parameter(torch.tensor(c, dtype=torch.float32), requires_grad=False)
 
     def forward(self, etr):
-        return torch.exp(torch.log(self.v) + self.m * etr * 16/6 *12/24) #self.a * etr**2 + self.b * etr + self.c
+        return self.v + self.m * etr
 
 class DifferentiableMergingLoss(nn.Module):
-    def __init__(self, throughput_proxy, criterion, accuracy_weight=1.0, throughput_weight=1.0):
+    def __init__(self, throughput_proxy, criterion, accuracy_weight=1.0, throughput_weight=1.0, target_thru=10.0):
         super(DifferentiableMergingLoss, self).__init__()
         self.throughput_proxy = throughput_proxy
         self.accuracy_weight = accuracy_weight
         self.throughput_weight = throughput_weight
         self.criterion = criterion
+        self.target_thru = nn.Parameter(torch.log(torch.tensor(target_thru, dtype=torch.float32)), requires_grad=False)
 
-    def forward(self, predictions, targets, etr, target_thru):
+    def forward(self, predictions, targets, etr):
         # Compute accuracy loss
         loss_cls = self.criterion(predictions, targets)
 
         # Compute (negative) throughput loss
         # We use negative because we want to maximize throughput
-        throughput_loss = -self.throughput_proxy(etr) #(target_thru-self.throughput_proxy(etr))
+        throughput_loss = (self.target_thru-self.throughput_proxy(etr)) ** 2
 
         # Combine losses
-        total_loss = self.accuracy_weight * loss_cls + self.throughput_weight * throughput_loss
+        total_loss = self.accuracy_weight * loss_cls + self.throughput_weight * throughput_loss #self.throughput_weight * throughput_loss 
 
         return total_loss, loss_cls, throughput_loss
     
@@ -432,11 +464,17 @@ def main(args):
                 loss_scaler.load_state_dict(checkpoint['scaler'])
 
 
+    # # Initialize the throughput proxy with the learned quadratic coefficients
+    # a, b, c = 0.011698369441096304, 0.4723945366031816, 56.65657604221558  #56.65657604221558  # Replace with your actual coefficients
+    # throughput_proxy = ThroughputProxy(a, b, c).to(device)
+    # # Create the loss function
+    # loss_fn = DifferentiableMergingLoss(throughput_proxy, criterion, accuracy_weight=1.0, throughput_weight=0.1).to(device)
+
     # Initialize the throughput proxy with the learned quadratic coefficients
-    m, v = 0.014234242865188342, 5.02 #0.011698369441096304, 0.4723945366031816, 5.02 #56.65657604221558  # Replace with your actual coefficients
+    m, v = 0.01227585903785216, 3.9664983310864943 #0.014234242865188342, 3.9862143647805586 #56.0 #3.9862143647805586 #0.01227585903785216, 3.9664983310864943 # Replace with your actual coefficients
     throughput_proxy = ThroughputProxy(m, v).to(device)
     # Create the loss function
-    loss_fn = DifferentiableMergingLoss(throughput_proxy, criterion, accuracy_weight=1.0, throughput_weight=0.1).to(device)
+    loss_fn = DifferentiableMergingLoss(throughput_proxy, criterion, accuracy_weight=0.1, throughput_weight=100.0, target_thru=args.target_thru).to(device)
 
     # prev_loss = math.inf
     logger.info(f"Start training for {args.epochs} epochs")

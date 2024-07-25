@@ -73,7 +73,7 @@ def train_one_epoch(loss_fn, writer, model: torch.nn.Module, criterion,
             outputs, flops, sched, dec, etrr, merge_kept_num_prob = model(samples)
             
             # Compute loss
-            loss, loss_cls, thru_loss = loss_fn(outputs, targets, etrr, target_thru)
+            loss, loss_cls, thru_loss = loss_fn(outputs, targets, etrr)
 
             # loss_cls = criterion(outputs, targets)
             # loss_flops = ((flops/1e9)-target_flops)**2
