@@ -70,10 +70,19 @@ def train_one_epoch(loss_fn, writer, model: torch.nn.Module, criterion,
             samples, targets = mixup_fn(samples, targets)
 
         with torch.cuda.amp.autocast():
-            outputs, flops, sched, dec, etrr, merge_kept_num_prob = model(samples)
+            outputs, flops, etrr = model(samples)
+            loss_cls = criterion(outputs, targets)
+            loss_flops = ((flops/1e9)-target_flops)**2
+            # loss = lamb * loss_flops + loss_cls
+            loss = lamb * (etrr - target_etrr) **2 + loss_cls
+
+            # loss, loss_cls, thru_loss = loss_fn(outputs, targets, etrr, accuracy_weight=0.1, throughput_weight=1000.0)
             
             # Compute loss
-            loss, loss_cls, thru_loss = loss_fn(outputs, targets, etrr)
+            # if data_iter_step % 2 == 0:
+            #     loss, loss_cls, thru_loss = loss_fn(outputs, targets, etrr, accuracy_weight=0.0, throughput_weight=1000.0)
+            # else:
+            #     loss, loss_cls, thru_loss = loss_fn(outputs, targets, etrr, accuracy_weight=0.1, throughput_weight=0.0)
 
             # loss_cls = criterion(outputs, targets)
             # loss_flops = ((flops/1e9)-target_flops)**2
@@ -107,24 +116,13 @@ def train_one_epoch(loss_fn, writer, model: torch.nn.Module, criterion,
             
             
         writer.add_scalar("loss", loss, (epoch+1) * data_iter_step)
-        writer.add_scalar("thru_loss", thru_loss, (epoch+1) * data_iter_step)
+        # writer.add_scalar("thru_loss", thru_loss, (epoch+1) * data_iter_step)
         # writer.add_scalar("etrr_loss", etrr_loss, (epoch+1) * data_iter_step)
         writer.add_scalar("loss_cls", loss_cls, (epoch+1) * data_iter_step)
         # writer.add_scalar("loss_sms", loss_sms, (epoch+1) * data_iter_step)
-        # writer.add_scalar("loss_flops", loss_flops_value, (epoch+1) * data_iter_step)
-
-        merge_dec = model.get_dec()
-        merge_prob = model.get_merge_prob()
-
-        i = 1
-        for dec, prob in zip(merge_dec, merge_prob):
-            writer.add_scalar(f"merge_dec_{i}", dec, (epoch+1) * data_iter_step)
-            writer.add_scalar(f"merge_prob_{i}", prob, (epoch+1) * data_iter_step)
-            i+=1
-        
+        # writer.add_scalar("loss_flops", loss_flops_value, (epoch+1) * data_iter_step)    
 
 
-        
         if not math.isfinite(loss_cls_value):
             logger.info("Loss is {}, stopping training".format(loss_cls_value))
             sys.exit(1)
@@ -143,17 +141,17 @@ def train_one_epoch(loss_fn, writer, model: torch.nn.Module, criterion,
             if hasattr(model, 'module'):  # for DDP 
                 # prune_kept_num, merge_kept_num = model.module.get_kept_num()
                 merge_kept_num = model.module.get_kept_num()
-                merge_dec = model.module.get_dec()
-                merge_prob = model.module.get_merge_prob()
+                # merge_dec = model.module.get_dec()
+                # merge_prob = model.module.get_merge_prob()
             else:
                 # prune_kept_num, merge_kept_num = model.get_kept_num()
                 merge_kept_num = model.get_kept_num()
-                merge_dec = model.get_dec()
-                merge_prob = model.get_merge_prob()
+                # merge_dec = model.get_dec()
+                # merge_prob = model.get_merge_prob()
             # logger.info(f'prune kept number:{prune_kept_num}')
             logger.info(f'merge kept number:{merge_kept_num}')
-            logger.info(f'merge decision:{merge_dec}')
-            logger.info(f'merge prob:{merge_prob}')
+            # logger.info(f'merge decision:{merge_dec}')
+            # logger.info(f'merge prob:{merge_prob}')
 
 
         metric_logger.update(loss_cls=loss_cls_value)
@@ -162,7 +160,7 @@ def train_one_epoch(loss_fn, writer, model: torch.nn.Module, criterion,
         # metric_logger.update(loss_sms=loss_sms_value)
         # metric_logger.update(loss_lat=loss_lat)
         # metric_logger.update(thru=thru)
-        metric_logger.update(thru_loss=thru_loss)
+        # metric_logger.update(thru_loss=thru_loss)
         metric_logger.update(etrr=etrr)
         # metric_logger.update(etrr_loss=etrr_loss)
         # metric_logger.update(loss_flops=loss_flops_value)
@@ -191,7 +189,7 @@ def evaluate(data_loader, model, device,logger=None):
 
         # compute output
         with torch.cuda.amp.autocast():
-            output, flops, sched, dec, etrr, merge_kept_num_prob = model(images)
+            output, flops, etrr = model(images)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -205,14 +203,14 @@ def evaluate(data_loader, model, device,logger=None):
     if hasattr(model, 'module'):  # for DDP 
         # prune_kept_num, merge_kept_num = model.module.get_kept_num()
         merge_kept_num = model.module.get_kept_num()
-        merge_dec = model.module.get_dec()
+        # merge_dec = model.module.get_dec()
     else:
         # prune_kept_num, merge_kept_num = model.get_kept_num()
         merge_kept_num = model.get_kept_num()
-        merge_dec = model.get_dec()
+        # merge_dec = model.get_dec()
     # logger.info(f'prune kept number:{prune_kept_num}')
     logger.info(f'merge kept number:{merge_kept_num}')
-    logger.info(f'merge decision:{merge_dec}')
+    # logger.info(f'merge decision:{merge_dec}')
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
 

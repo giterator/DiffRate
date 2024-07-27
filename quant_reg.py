@@ -19,7 +19,7 @@ data['Throughput'] = np.log(data['Throughput'])
 
 # Quantile regression for the median (50th percentile)
 mod = smf.quantreg('Throughput ~ ETR', data=data)
-res = mod.fit(q=0.001)
+res = mod.fit(q=0.5) #0.95 #0.001
 # print(res.summary())
 
 coef = res.params

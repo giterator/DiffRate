@@ -77,15 +77,13 @@ class ThroughputProxy(nn.Module):
         return self.v + self.m * etr
 
 class DifferentiableMergingLoss(nn.Module):
-    def __init__(self, throughput_proxy, criterion, accuracy_weight=1.0, throughput_weight=1.0, target_thru=10.0):
+    def __init__(self, throughput_proxy, criterion, target_thru=10.0):
         super(DifferentiableMergingLoss, self).__init__()
         self.throughput_proxy = throughput_proxy
-        self.accuracy_weight = accuracy_weight
-        self.throughput_weight = throughput_weight
         self.criterion = criterion
         self.target_thru = nn.Parameter(torch.log(torch.tensor(target_thru, dtype=torch.float32)), requires_grad=False)
 
-    def forward(self, predictions, targets, etr):
+    def forward(self, predictions, targets, etr, accuracy_weight, throughput_weight):
         # Compute accuracy loss
         loss_cls = self.criterion(predictions, targets)
 
@@ -94,7 +92,7 @@ class DifferentiableMergingLoss(nn.Module):
         throughput_loss = (self.target_thru-self.throughput_proxy(etr)) ** 2
 
         # Combine losses
-        total_loss = self.accuracy_weight * loss_cls + self.throughput_weight * throughput_loss #self.throughput_weight * throughput_loss 
+        total_loss = accuracy_weight * loss_cls + throughput_weight * throughput_loss #self.throughput_weight * throughput_loss 
 
         return total_loss, loss_cls, throughput_loss
     
@@ -252,7 +250,7 @@ def get_args_parser():
     parser.add_argument('--target_etrr', type=float, default=25.0)
     parser.add_argument('--target_thru', type=float, default=75.0)
     parser.add_argument('--target_batch_size', type=int, default=8)
-    parser.add_argument('--granularity', type=int, default=1, help='the token number gap between each compression rate candidate')
+    parser.add_argument('--granularity', type=int, default=4, help='the token number gap between each compression rate candidate')
     parser.add_argument('--load_compression_rate', action='store_true', help='eval by exiting compression rate in compression_rate.json')
     parser.add_argument('--warmup_compression_rate', action='store_true', default=False, help='inactive computational constraint in first epoch')
     return parser
@@ -471,10 +469,10 @@ def main(args):
     # loss_fn = DifferentiableMergingLoss(throughput_proxy, criterion, accuracy_weight=1.0, throughput_weight=0.1).to(device)
 
     # Initialize the throughput proxy with the learned quadratic coefficients
-    m, v = 0.01227585903785216, 3.9664983310864943 #0.014234242865188342, 3.9862143647805586 #56.0 #3.9862143647805586 #0.01227585903785216, 3.9664983310864943 # Replace with your actual coefficients
+    m, v = 0.015054235376805536, 4.031515486466018 #0.014234242865188342, 3.9862143647805586 #56.0 #3.9862143647805586 #0.01227585903785216, 3.9664983310864943 # Replace with your actual coefficients
     throughput_proxy = ThroughputProxy(m, v).to(device)
     # Create the loss function
-    loss_fn = DifferentiableMergingLoss(throughput_proxy, criterion, accuracy_weight=0.1, throughput_weight=100.0, target_thru=args.target_thru).to(device)
+    loss_fn = DifferentiableMergingLoss(throughput_proxy, criterion, target_thru=args.target_thru).to(device)
 
     # prev_loss = math.inf
     logger.info(f"Start training for {args.epochs} epochs")

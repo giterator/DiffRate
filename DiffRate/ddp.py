@@ -23,24 +23,28 @@ class DiffRate(nn.Module):
         
         # for more clean code, we directly set the candidate as kept token number, which can perform same as compression rate
         # at least one token should be kept
-        self.kept_token_candidate = nn.Parameter(torch.arange(patch_number, -1,-1*granularity).float()) #nn.Parameter(torch.arange(patch_number, 0,-1*granularity).float())
+        # self.kept_token_candidate = nn.Parameter(torch.arange(patch_number, -1,-1*granularity).float()) #nn.Parameter(torch.arange(patch_number, 0,-1*granularity).float())
+        self.kept_token_candidate =  nn.Parameter(torch.arange(patch_number, 0,-1*granularity).float())
+
         self.kept_token_candidate.requires_grad_(False)
-        # temp = torch.zeros_like(self.kept_token_candidate)
+
+        temp = torch.zeros_like(self.kept_token_candidate)
+        # temp[120:196+1] = 1.0
         # temp[-1] = 1.0
         # print(temp.shape)
         # print(patch_number)
         # print(granularity)
-        self.selected_probability = nn.Parameter(torch.zeros_like(self.kept_token_candidate)) #nn.Parameter(temp) #nn.Parameter(torch.randn_like(self.kept_token_candidate))
+        self.selected_probability = nn.Parameter(temp) #nn.Parameter(torch.zeros_like(self.kept_token_candidate)) #nn.Parameter(torch.randn_like(self.kept_token_candidate))
         self.selected_probability.requires_grad_(True)
         # self.selected_probability_softmax = self.selected_probability.softmax(dim=-1)
 
         # print(torch.argwhere(self.selected_probability_softmax))
 
         ## LSMS
-        self.merge_prob =  nn.Parameter(torch.tensor(0.5)) #0.5 torch.tensor(-0.5) torch.tensor(np.random.randn())
-        self.merge_prob.requires_grad_(True)
+        # self.merge_prob =  nn.Parameter(torch.tensor(0.5)) #0.5 torch.tensor(-0.5) torch.tensor(np.random.randn())
+        # self.merge_prob.requires_grad_(True)
 
-        self.merge_decision = ste_step(torch.sigmoid(self.merge_prob)) #1#
+        # self.merge_decision = ste_step(torch.sigmoid(self.merge_prob)) #1#
         
         # the learn target, which can be directly applied to the off-the-shlef pre-trained models
         self.kept_token_number = self.patch_number + self.class_token_num
@@ -53,22 +57,24 @@ class DiffRate(nn.Module):
         # which will be used to calculate FLOPs, leveraging STE in Ceil to keep gradient backpropagation
         # kept_token_number = ste_ceil(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax)) + self.class_token_num
         
-        self.merge_prob_sigmoid = torch.sigmoid(self.merge_prob)
-        merge_decision = ste_step(self.merge_prob_sigmoid)
+        # self.merge_prob_sigmoid = torch.sigmoid(self.merge_prob)
+        # merge_decision = ste_step(self.merge_prob_sigmoid)
 
-        self.merge_decision = merge_decision
+        # self.merge_decision = merge_decision
 
         # print(self.merge_prob)
         # print(self.merge_prob_sigmoid)
         # print(merge_decision)
 
-        kept_token_number = merge_decision * ste_ceil(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax)) + torch.tensor((1 - merge_decision) * 196.0) + self.class_token_num
+        # kept_token_number = ste_ceil(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax)) + self.class_token_num
+        kept_token_number = ste_ceil(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax)) + self.class_token_num
+
         self.kept_token_number = int(kept_token_number)
 
         # print(self.selected_probability_softmax.shape)
         # print(self.kept_token_candidate.shape)
         # print(torch.matmul(self.kept_token_candidate,self.selected_probability_softmax).shape)
-        return kept_token_number , merge_decision, self.merge_prob, self.selected_probability_softmax
+        return kept_token_number
 
 
         # # print(self.merge_prob)
